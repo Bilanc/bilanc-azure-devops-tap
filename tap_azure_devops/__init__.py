@@ -718,7 +718,7 @@ def get_all_work_items(schema, project, state, mdata, start_date):
             f"SELECT [System.Id] FROM WorkItems "
             f"WHERE [System.TeamProject] = '{project}' "
             f"AND [System.ChangedDate] >= '{since_date}' "
-            f"ORDER BY [System.ChangedDate] ASC"
+            f"ORDER BY [System.ChangedDate] DESC"
         )
     }
 
@@ -752,6 +752,7 @@ def get_all_work_items(schema, project, state, mdata, start_date):
         "Microsoft.VSTS.Common.ClosedDate", "Microsoft.VSTS.Scheduling.TargetDate",
     ]
 
+    max_changed_date = None
     with metrics.record_counter("work_items") as counter:
         for i in range(0, len(all_ids), 200):
             batch_ids = all_ids[i:i + 200]
@@ -794,11 +795,13 @@ def get_all_work_items(schema, project, state, mdata, start_date):
                         rec = transformer.transform(record, schema, metadata=metadata.to_map(mdata))
                     singer.write_record("work_items", rec, time_extracted=extraction_time)
                     changed_date = fields.get("System.ChangedDate")
-                    if changed_date:
-                        singer.write_bookmark(state, project, "work_items", {"since": changed_date})
+                    if changed_date and (max_changed_date is None or changed_date > max_changed_date):
+                        max_changed_date = changed_date
                     counter.increment()
             except Exception as e:
                 logger.exception("Failed to fetch work items batch for project %s: %s", project, e)
+    if max_changed_date:
+        singer.write_bookmark(state, project, "work_items", {"since": max_changed_date})
     return state
 
 
@@ -807,10 +810,11 @@ def get_all_builds(schema, project, state, mdata, start_date):
     bookmark = get_bookmark(state, project, "builds", "since", start_date)
 
     url = f"{BASE_URL}/{org}/{project}/_apis/build/builds"
-    params = {"api-version": API_VERSION, "$top": 1000}
+    params = {"api-version": API_VERSION, "$top": 1000, "queryOrder": "finishTimeDescending"}
     if bookmark:
         params["minTime"] = bookmark
 
+    max_finish_time = None
     with metrics.record_counter("builds") as counter:
         try:
             for response in authed_get_all_pages("builds", url, params):
@@ -819,14 +823,16 @@ def get_all_builds(schema, project, state, mdata, start_date):
                     build["_sdc_repository"] = project
                     build["inserted_at"] = singer.utils.strftime(extraction_time)
                     finish_time = build.get("finishTime")
-                    if finish_time:
-                        singer.write_bookmark(state, project, "builds", {"since": finish_time})
+                    if finish_time and (max_finish_time is None or finish_time > max_finish_time):
+                        max_finish_time = finish_time
                     with singer.Transformer() as transformer:
                         rec = transformer.transform(build, schema, metadata=metadata.to_map(mdata))
                     singer.write_record("builds", rec, time_extracted=extraction_time)
                     counter.increment()
         except NotFoundException:
             logger.warning("Project %s not found, skipping builds", project)
+    if max_finish_time:
+        singer.write_bookmark(state, project, "builds", {"since": max_finish_time})
     return state
 
 
