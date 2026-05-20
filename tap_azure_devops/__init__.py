@@ -653,10 +653,6 @@ def get_all_pull_requests(schemas, repo_path, state, mdata, start_date):
                             metadata=metadata.to_map(mdata["pull_requests"]),
                         )
                     singer.write_record("pull_requests", rec, time_extracted=extraction_time)
-                    singer.write_bookmark(
-                        state, repo_path, "pull_requests",
-                        {"since": singer.utils.strftime(extraction_time)},
-                    )
                     counter.increment()
 
                     if schemas.get("pull_request_commits"):
@@ -708,6 +704,11 @@ def get_all_pull_requests(schemas, repo_path, state, mdata, start_date):
                             singer.write_record(
                                 "pull_request_comments", comment_rec, time_extracted=extraction_time
                             )
+
+                    singer.write_bookmark(
+                        state, repo_path, "pull_requests",
+                        {"since": singer.utils.strftime(extraction_time)},
+                    )
         except NotFoundException:
             logger.warning("Repository %s not found, skipping pull requests", repo_path)
     return state
@@ -878,7 +879,7 @@ def get_all_user_entitlements(schema, org, state, mdata, start_date):
             body = response.json()
             extraction_time = singer.utils.now()
 
-            for member in body.get("items", []):
+            for member in body.get("value", []):
                 user = member.get("user") or {}
                 access = member.get("accessLevel") or {}
                 record = {
