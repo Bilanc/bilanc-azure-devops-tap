@@ -374,6 +374,7 @@ def get_all_commits(schema, repo_path, state, mdata, start_date):
 
     url = f"{BASE_URL}/{org}/{project}/_apis/git/repositories/{repo_name}/commits"
 
+    max_commit_date = None
     with metrics.record_counter("commits") as counter:
         try:
             for response in authed_get_all_pages("commits", url, params):
@@ -381,16 +382,20 @@ def get_all_commits(schema, repo_path, state, mdata, start_date):
                 for commit in response.json().get("value", []):
                     commit["_sdc_repository"] = repo_path
                     commit["inserted_at"] = singer.utils.strftime(extraction_time)
+                    commit_date = (
+                        (commit.get("author") or {}).get("date")
+                        or (commit.get("committer") or {}).get("date")
+                    )
+                    if commit_date and (max_commit_date is None or commit_date > max_commit_date):
+                        max_commit_date = commit_date
                     with singer.Transformer() as transformer:
                         rec = transformer.transform(commit, schema, metadata=metadata.to_map(mdata))
                     singer.write_record("commits", rec, time_extracted=extraction_time)
-                    singer.write_bookmark(
-                        state, repo_path, "commits",
-                        {"since": singer.utils.strftime(extraction_time)},
-                    )
                     counter.increment()
         except NotFoundException:
             logger.warning("Repository %s not found, skipping commits", repo_path)
+    if max_commit_date:
+        singer.write_bookmark(state, repo_path, "commits", {"since": max_commit_date})
     return state
 
 
@@ -629,7 +634,7 @@ def get_all_pull_requests(schemas, repo_path, state, mdata, start_date):
                     if bookmark_time and pr_updated:
                         try:
                             if singer.utils.strptime_to_utc(pr_updated) < bookmark_time:
-                                return state
+                                continue
                         except Exception:
                             pass
 
@@ -1032,6 +1037,7 @@ SYNC_FUNCTIONS = {
     "builds": get_all_builds,
     "pipelines": get_all_pipelines,
     "user_entitlements": get_all_user_entitlements,
+    "group_entitlements": get_all_group_entitlements,
     "teams": get_all_teams,
 }
 
@@ -1048,13 +1054,9 @@ def do_sync(config, state, catalog):
     selected_stream_ids = get_selected_streams(catalog)
     validate_dependencies(selected_stream_ids)
 
-    repositories = extract_repos_from_config(config)
-    if not repositories:
-        logger.warning("No repositories configured. Check your config.")
-        return
-
     org = config["organization"]
-    projects = list(dict.fromkeys(r.split("/")[0] for r in repositories))
+    repositories = extract_repos_from_config(config)
+    projects = list(dict.fromkeys(r.split("/")[0] for r in repositories)) if repositories else []
     state = translate_state(state, catalog, repositories + projects + [org])
     singer.write_state(state)
 
@@ -1086,6 +1088,10 @@ def do_sync(config, state, catalog):
             scopes = projects
         else:
             scopes = repositories
+
+        if not scopes:
+            logger.warning("Skipping %s — no repositories configured", stream_id)
+            continue
 
         for scope in scopes:
             logger.info("Syncing %s for scope: %s", stream_id, scope)
