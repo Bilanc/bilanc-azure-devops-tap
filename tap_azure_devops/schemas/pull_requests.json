@@ -1,0 +1,93 @@
+{
+  "type": ["null", "object"],
+  "additionalProperties": false,
+  "properties": {
+    "_sdc_repository": { "type": ["string"] },
+    "id": { "type": ["null", "string"] },
+    "pr_number": { "type": ["null", "integer"] },
+    "pullRequestId": { "type": ["null", "integer"] },
+    "codeReviewId": { "type": ["null", "integer"] },
+    "status": { "type": ["null", "string"] },
+    "isDraft": { "type": ["null", "boolean"] },
+    "title": { "type": ["null", "string"] },
+    "description": { "type": ["null", "string"] },
+    "sourceRefName": { "type": ["null", "string"] },
+    "targetRefName": { "type": ["null", "string"] },
+    "mergeStatus": { "type": ["null", "string"] },
+    "mergeId": { "type": ["null", "string"] },
+    "supportsIterations": { "type": ["null", "boolean"] },
+    "url": { "type": ["null", "string"] },
+    "creationDate": { "type": ["null", "string"], "format": "date-time" },
+    "closedDate": { "type": ["null", "string"], "format": "date-time" },
+    "completionQueueTime": { "type": ["null", "string"], "format": "date-time" },
+    "createdBy": {
+      "type": ["null", "object"],
+      "additionalProperties": false,
+      "properties": {
+        "id": { "type": ["null", "string"] },
+        "displayName": { "type": ["null", "string"] },
+        "uniqueName": { "type": ["null", "string"] },
+        "url": { "type": ["null", "string"] },
+        "imageUrl": { "type": ["null", "string"] }
+      }
+    },
+    "autoCompleteSetBy": {
+      "type": ["null", "object"],
+      "additionalProperties": false,
+      "properties": {
+        "id": { "type": ["null", "string"] },
+        "displayName": { "type": ["null", "string"] },
+        "uniqueName": { "type": ["null", "string"] }
+      }
+    },
+    "closedBy": {
+      "type": ["null", "object"],
+      "additionalProperties": false,
+      "properties": {
+        "id": { "type": ["null", "string"] },
+        "displayName": { "type": ["null", "string"] },
+        "uniqueName": { "type": ["null", "string"] }
+      }
+    },
+    "reviewers": {
+      "type": ["null", "array"],
+      "items": {
+        "type": ["null", "object"],
+        "additionalProperties": false,
+        "properties": {
+          "id": { "type": ["null", "string"] },
+          "displayName": { "type": ["null", "string"] },
+          "uniqueName": { "type": ["null", "string"] },
+          "vote": { "type": ["null", "integer"] },
+          "isRequired": { "type": ["null", "boolean"] },
+          "isFlagged": { "type": ["null", "boolean"] }
+        }
+      }
+    },
+    "lastMergeSourceCommit": {
+      "type": ["null", "object"],
+      "additionalProperties": false,
+      "properties": {
+        "commitId": { "type": ["null", "string"] },
+        "url": { "type": ["null", "string"] }
+      }
+    },
+    "lastMergeTargetCommit": {
+      "type": ["null", "object"],
+      "additionalProperties": false,
+      "properties": {
+        "commitId": { "type": ["null", "string"] },
+        "url": { "type": ["null", "string"] }
+      }
+    },
+    "lastMergeCommit": {
+      "type": ["null", "object"],
+      "additionalProperties": false,
+      "properties": {
+        "commitId": { "type": ["null", "string"] },
+        "url": { "type": ["null", "string"] }
+      }
+    },
+    "inserted_at": { "type": ["string"], "format": "date-time" }
+  }
+}

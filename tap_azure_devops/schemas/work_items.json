@@ -1,0 +1,32 @@
+{
+  "type": ["null", "object"],
+  "additionalProperties": false,
+  "properties": {
+    "_sdc_repository": { "type": ["string"] },
+    "id": { "type": ["null", "integer"] },
+    "url": { "type": ["null", "string"] },
+    "system_work_item_type": { "type": ["null", "string"] },
+    "system_state": { "type": ["null", "string"] },
+    "system_title": { "type": ["null", "string"] },
+    "system_description": { "type": ["null", "string"] },
+    "system_area_path": { "type": ["null", "string"] },
+    "system_team_project": { "type": ["null", "string"] },
+    "system_iteration_path": { "type": ["null", "string"] },
+    "system_created_date": { "type": ["null", "string"], "format": "date-time" },
+    "system_changed_date": { "type": ["null", "string"], "format": "date-time" },
+    "system_created_by_display_name": { "type": ["null", "string"] },
+    "system_created_by_unique_name": { "type": ["null", "string"] },
+    "system_changed_by_display_name": { "type": ["null", "string"] },
+    "system_changed_by_unique_name": { "type": ["null", "string"] },
+    "system_assigned_to_display_name": { "type": ["null", "string"] },
+    "system_assigned_to_unique_name": { "type": ["null", "string"] },
+    "system_tags": { "type": ["null", "string"] },
+    "system_parent": { "type": ["null", "integer"] },
+    "system_board_column": { "type": ["null", "string"] },
+    "microsoft_vsts_common_priority": { "type": ["null", "integer"] },
+    "microsoft_vsts_scheduling_story_points": { "type": ["null", "number"] },
+    "microsoft_vsts_common_closed_date": { "type": ["null", "string"], "format": "date-time" },
+    "microsoft_vsts_scheduling_target_date": { "type": ["null", "string"], "format": "date-time" },
+    "inserted_at": { "type": ["string"], "format": "date-time" }
+  }
+}

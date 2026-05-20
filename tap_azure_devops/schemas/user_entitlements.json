@@ -1,0 +1,26 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "id": {"type": ["string", "null"]},
+    "user_id": {"type": ["string", "null"]},
+    "principal_name": {"type": ["string", "null"]},
+    "mail_address": {"type": ["string", "null"]},
+    "display_name": {"type": ["string", "null"]},
+    "descriptor": {"type": ["string", "null"]},
+    "subject_kind": {"type": ["string", "null"]},
+    "origin": {"type": ["string", "null"]},
+    "origin_id": {"type": ["string", "null"]},
+    "domain": {"type": ["string", "null"]},
+    "is_deleted_in_origin": {"type": ["boolean", "null"]},
+    "license_display_name": {"type": ["string", "null"]},
+    "account_license_type": {"type": ["string", "null"]},
+    "licensing_source": {"type": ["string", "null"]},
+    "assignment_source": {"type": ["string", "null"]},
+    "license_status": {"type": ["string", "null"]},
+    "last_accessed_date": {"type": ["string", "null"], "format": "date-time"},
+    "date_created": {"type": ["string", "null"], "format": "date-time"},
+    "_sdc_organization": {"type": ["string", "null"]},
+    "inserted_at": {"type": ["string", "null"], "format": "date-time"}
+  }
+}
