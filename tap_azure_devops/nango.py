@@ -22,4 +22,4 @@ def get_nango_token(config: Dict[str, Any]) -> str:
         },
     )
     response.raise_for_status()
-    return response.json().get("credentials", {}).get("access_token")
+    return response.json().get("credentials", {}).get("password")
