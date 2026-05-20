@@ -1,0 +1,31 @@
+{
+  "type": ["null", "object"],
+  "additionalProperties": false,
+  "properties": {
+    "_sdc_repository": { "type": ["string"] },
+    "id": { "type": ["null", "string"] },
+    "pr_id": { "type": ["null", "string"] },
+    "pr_number": { "type": ["null", "integer"] },
+    "iteration_id": { "type": ["null", "integer"] },
+    "change_id": { "type": ["null", "integer"] },
+    "change_type": { "type": ["null", "string"] },
+    "iteration_reason": { "type": ["null", "string"], "description": "push | forcePush | create | rebase | unknown | retarget" },
+    "original_path": { "type": ["null", "string"] },
+    "file_content": { "type": ["null", "string"] },
+    "file_diff": { "type": ["null", "string"] },
+    "item": {
+      "type": ["null", "object"],
+      "additionalProperties": false,
+      "properties": {
+        "objectId": { "type": ["null", "string"] },
+        "originalObjectId": { "type": ["null", "string"] },
+        "gitObjectType": { "type": ["null", "string"] },
+        "commitId": { "type": ["null", "string"] },
+        "path": { "type": ["null", "string"] },
+        "isFolder": { "type": ["null", "boolean"] },
+        "url": { "type": ["null", "string"] }
+      }
+    },
+    "inserted_at": { "type": ["string"], "format": "date-time" }
+  }
+}

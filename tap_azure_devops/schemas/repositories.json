@@ -1,0 +1,21 @@
+{
+  "type": ["null", "object"],
+  "additionalProperties": false,
+  "properties": {
+    "_sdc_repository": { "type": ["string"] },
+    "_sdc_project": { "type": ["null", "string"] },
+    "id": { "type": ["null", "string"] },
+    "name": { "type": ["null", "string"] },
+    "url": { "type": ["null", "string"] },
+    "defaultBranch": { "type": ["null", "string"] },
+    "size": { "type": ["null", "integer"] },
+    "remoteUrl": { "type": ["null", "string"] },
+    "sshUrl": { "type": ["null", "string"] },
+    "webUrl": { "type": ["null", "string"] },
+    "project_id": { "type": ["null", "string"] },
+    "project_name": { "type": ["null", "string"] },
+    "isFork": { "type": ["null", "boolean"] },
+    "isDisabled": { "type": ["null", "boolean"] },
+    "inserted_at": { "type": ["string"], "format": "date-time" }
+  }
+}

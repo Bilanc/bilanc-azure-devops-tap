@@ -1,0 +1,79 @@
+{
+  "type": ["null", "object"],
+  "additionalProperties": false,
+  "properties": {
+    "_sdc_repository": { "type": ["string"] },
+    "id": { "type": ["null", "integer"] },
+    "buildNumber": { "type": ["null", "string"] },
+    "buildNumberRevision": { "type": ["null", "integer"] },
+    "status": { "type": ["null", "string"] },
+    "result": { "type": ["null", "string"] },
+    "priority": { "type": ["null", "string"] },
+    "reason": { "type": ["null", "string"] },
+    "quality": { "type": ["null", "string"] },
+    "sourceBranch": { "type": ["null", "string"] },
+    "sourceVersion": { "type": ["null", "string"] },
+    "url": { "type": ["null", "string"] },
+    "queueTime": { "type": ["null", "string"], "format": "date-time" },
+    "startTime": { "type": ["null", "string"], "format": "date-time" },
+    "finishTime": { "type": ["null", "string"], "format": "date-time" },
+    "definition": {
+      "type": ["null", "object"],
+      "additionalProperties": false,
+      "properties": {
+        "id": { "type": ["null", "integer"] },
+        "name": { "type": ["null", "string"] },
+        "type": { "type": ["null", "string"] },
+        "revision": { "type": ["null", "integer"] },
+        "path": { "type": ["null", "string"] },
+        "url": { "type": ["null", "string"] }
+      }
+    },
+    "requestedBy": {
+      "type": ["null", "object"],
+      "additionalProperties": false,
+      "properties": {
+        "id": { "type": ["null", "string"] },
+        "displayName": { "type": ["null", "string"] },
+        "uniqueName": { "type": ["null", "string"] }
+      }
+    },
+    "requestedFor": {
+      "type": ["null", "object"],
+      "additionalProperties": false,
+      "properties": {
+        "id": { "type": ["null", "string"] },
+        "displayName": { "type": ["null", "string"] },
+        "uniqueName": { "type": ["null", "string"] }
+      }
+    },
+    "project": {
+      "type": ["null", "object"],
+      "additionalProperties": false,
+      "properties": {
+        "id": { "type": ["null", "string"] },
+        "name": { "type": ["null", "string"] },
+        "state": { "type": ["null", "string"] }
+      }
+    },
+    "repository": {
+      "type": ["null", "object"],
+      "additionalProperties": false,
+      "properties": {
+        "id": { "type": ["null", "string"] },
+        "name": { "type": ["null", "string"] },
+        "type": { "type": ["null", "string"] }
+      }
+    },
+    "logs": {
+      "type": ["null", "object"],
+      "additionalProperties": false,
+      "properties": {
+        "id": { "type": ["null", "integer"] },
+        "type": { "type": ["null", "string"] },
+        "url": { "type": ["null", "string"] }
+      }
+    },
+    "inserted_at": { "type": ["string"], "format": "date-time" }
+  }
+}

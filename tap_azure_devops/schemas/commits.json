@@ -1,0 +1,42 @@
+{
+  "type": ["null", "object"],
+  "additionalProperties": false,
+  "properties": {
+    "_sdc_repository": { "type": ["string"] },
+    "commitId": { "type": ["null", "string"] },
+    "comment": { "type": ["null", "string"] },
+    "commentTruncated": { "type": ["null", "boolean"] },
+    "url": { "type": ["null", "string"] },
+    "remoteUrl": { "type": ["null", "string"] },
+    "author": {
+      "type": ["null", "object"],
+      "additionalProperties": false,
+      "properties": {
+        "name": { "type": ["null", "string"] },
+        "email": { "type": ["null", "string"] },
+        "date": { "type": ["null", "string"], "format": "date-time" },
+        "imageUrl": { "type": ["null", "string"] }
+      }
+    },
+    "committer": {
+      "type": ["null", "object"],
+      "additionalProperties": false,
+      "properties": {
+        "name": { "type": ["null", "string"] },
+        "email": { "type": ["null", "string"] },
+        "date": { "type": ["null", "string"], "format": "date-time" },
+        "imageUrl": { "type": ["null", "string"] }
+      }
+    },
+    "changeCounts": {
+      "type": ["null", "object"],
+      "additionalProperties": false,
+      "properties": {
+        "Add": { "type": ["null", "integer"] },
+        "Edit": { "type": ["null", "integer"] },
+        "Delete": { "type": ["null", "integer"] }
+      }
+    },
+    "inserted_at": { "type": ["string"], "format": "date-time" }
+  }
+}

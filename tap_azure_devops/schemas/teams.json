@@ -1,0 +1,15 @@
+{
+  "type": ["null", "object"],
+  "additionalProperties": false,
+  "properties": {
+    "_sdc_repository": { "type": ["string"] },
+    "id": { "type": ["null", "string"] },
+    "name": { "type": ["null", "string"] },
+    "url": { "type": ["null", "string"] },
+    "description": { "type": ["null", "string"] },
+    "identityUrl": { "type": ["null", "string"] },
+    "projectId": { "type": ["null", "string"] },
+    "projectName": { "type": ["null", "string"] },
+    "inserted_at": { "type": ["string"], "format": "date-time" }
+  }
+}

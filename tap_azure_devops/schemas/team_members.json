@@ -1,0 +1,17 @@
+{
+  "type": ["null", "object"],
+  "additionalProperties": false,
+  "properties": {
+    "_sdc_repository": { "type": ["string"] },
+    "id": { "type": ["null", "string"] },
+    "team_id": { "type": ["null", "string"] },
+    "member_id": { "type": ["null", "string"] },
+    "display_name": { "type": ["null", "string"] },
+    "unique_name": { "type": ["null", "string"] },
+    "url": { "type": ["null", "string"] },
+    "image_url": { "type": ["null", "string"] },
+    "descriptor": { "type": ["null", "string"] },
+    "is_team_admin": { "type": ["null", "boolean"] },
+    "inserted_at": { "type": ["string"], "format": "date-time" }
+  }
+}

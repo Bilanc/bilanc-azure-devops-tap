@@ -1,0 +1,24 @@
+{
+  "type": ["null", "object"],
+  "additionalProperties": false,
+  "properties": {
+    "_sdc_organization": { "type": ["string"] },
+    "id": { "type": ["null", "string"] },
+    "group_display_name": { "type": ["null", "string"] },
+    "group_description": { "type": ["null", "string"] },
+    "group_origin": { "type": ["null", "string"] },
+    "group_origin_id": { "type": ["null", "string"] },
+    "group_subject_kind": { "type": ["null", "string"] },
+    "group_domain": { "type": ["null", "string"] },
+    "group_principal_name": { "type": ["null", "string"] },
+    "group_descriptor": { "type": ["null", "string"] },
+    "license_display_name": { "type": ["null", "string"] },
+    "account_license_type": { "type": ["null", "string"] },
+    "licensing_source": { "type": ["null", "string"] },
+    "assignment_source": { "type": ["null", "string"] },
+    "license_status": { "type": ["null", "string"] },
+    "member_count": { "type": ["null", "integer"] },
+    "last_executed": { "type": ["null", "string"], "format": "date-time" },
+    "inserted_at": { "type": ["string"], "format": "date-time" }
+  }
+}

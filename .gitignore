@@ -1,0 +1,8 @@
+.venv/
+tap_azure_devops.egg-info
+config.json
+
+# run.sh outputs
+catalog.json
+catalog_selected.json
+data.singer

@@ -1,0 +1,20 @@
+{
+  "type": ["null", "object"],
+  "additionalProperties": false,
+  "properties": {
+    "_sdc_repository": { "type": ["string"] },
+    "id": { "type": ["null", "string"] },
+    "pr_id": { "type": ["null", "string"] },
+    "pr_number": { "type": ["null", "integer"] },
+    "reviewer_id": { "type": ["null", "string"] },
+    "display_name": { "type": ["null", "string"] },
+    "unique_name": { "type": ["null", "string"] },
+    "image_url": { "type": ["null", "string"] },
+    "vote": { "type": ["null", "integer"], "description": "10=approved, 5=approved with suggestions, 0=no vote, -5=waiting for author, -10=rejected" },
+    "has_declined": { "type": ["null", "boolean"] },
+    "is_required": { "type": ["null", "boolean"] },
+    "is_flagged": { "type": ["null", "boolean"] },
+    "reviewer_url": { "type": ["null", "string"] },
+    "inserted_at": { "type": ["string"], "format": "date-time" }
+  }
+}

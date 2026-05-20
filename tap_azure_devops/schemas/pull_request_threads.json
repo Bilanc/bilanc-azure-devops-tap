@@ -1,0 +1,65 @@
+{
+  "type": ["null", "object"],
+  "additionalProperties": false,
+  "properties": {
+    "_sdc_repository": { "type": ["string"] },
+    "id": { "type": ["null", "string"] },
+    "thread_id": { "type": ["null", "integer"] },
+    "pr_id": { "type": ["null", "string"] },
+    "pr_number": { "type": ["null", "integer"] },
+    "status": { "type": ["null", "string"] },
+    "isDeleted": { "type": ["null", "boolean"] },
+    "publishedDate": { "type": ["null", "string"], "format": "date-time" },
+    "lastUpdatedDate": { "type": ["null", "string"], "format": "date-time" },
+    "lastChangedDate": { "type": ["null", "string"], "format": "date-time" },
+    "threadContext": {
+      "type": ["null", "object"],
+      "additionalProperties": false,
+      "properties": {
+        "filePath": { "type": ["null", "string"] },
+        "rightFileStart": {
+          "type": ["null", "object"],
+          "additionalProperties": false,
+          "properties": {
+            "line": { "type": ["null", "integer"] },
+            "offset": { "type": ["null", "integer"] }
+          }
+        },
+        "rightFileEnd": {
+          "type": ["null", "object"],
+          "additionalProperties": false,
+          "properties": {
+            "line": { "type": ["null", "integer"] },
+            "offset": { "type": ["null", "integer"] }
+          }
+        }
+      }
+    },
+    "comments": {
+      "type": ["null", "array"],
+      "items": {
+        "type": ["null", "object"],
+        "additionalProperties": false,
+        "properties": {
+          "id": { "type": ["null", "integer"] },
+          "parentCommentId": { "type": ["null", "integer"] },
+          "content": { "type": ["null", "string"] },
+          "commentType": { "type": ["null", "string"] },
+          "publishedDate": { "type": ["null", "string"], "format": "date-time" },
+          "lastUpdatedDate": { "type": ["null", "string"], "format": "date-time" },
+          "lastContentUpdatedDate": { "type": ["null", "string"], "format": "date-time" },
+          "author": {
+            "type": ["null", "object"],
+            "additionalProperties": false,
+            "properties": {
+              "id": { "type": ["null", "string"] },
+              "displayName": { "type": ["null", "string"] },
+              "uniqueName": { "type": ["null", "string"] }
+            }
+          }
+        }
+      }
+    },
+    "inserted_at": { "type": ["string"], "format": "date-time" }
+  }
+}
