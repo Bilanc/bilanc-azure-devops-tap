@@ -1,6 +1,7 @@
 .venv/
 tap_azure_devops.egg-info
 config.json
+tap_azure_devops/__pycache__/
 
 # run.sh outputs
 catalog.json
