@@ -244,8 +244,9 @@ def get_all_repos_in_project(project):
 
 def extract_repos_from_config(config):
     repo_paths = []
-    repo_paths = list(filter(None, config["repository"].split(" ")))
+    repo_paths = list(filter(None, config.get("repository", "").split(" ")))
 
+    repo_paths = [r for r in repo_paths if "/" in r]
     wildcards = [r for r in repo_paths if r.split("/")[1] == "*"]
     if wildcards:
         repo_paths = [r for r in repo_paths if r not in wildcards]
@@ -932,7 +933,7 @@ def get_all_group_entitlements(schema, org, state, mdata, start_date):
 
             for entry in body.get("value", []):
                 group = entry.get("group") or {}
-                access = entry.get("accessLevel") or {}
+                access = entry.get("licenseRule") or entry.get("accessLevel") or {}
                 record = {
                     "id": entry.get("id"),
                     "group_display_name": group.get("displayName"),
