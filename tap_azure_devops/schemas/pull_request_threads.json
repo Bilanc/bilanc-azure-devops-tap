@@ -8,6 +8,7 @@
     "pr_id": { "type": ["null", "string"] },
     "pr_number": { "type": ["null", "integer"] },
     "status": { "type": ["null", "string"] },
+    "threadType": { "type": ["null", "string"] },
     "isDeleted": { "type": ["null", "boolean"] },
     "publishedDate": { "type": ["null", "string"], "format": "date-time" },
     "lastUpdatedDate": { "type": ["null", "string"], "format": "date-time" },

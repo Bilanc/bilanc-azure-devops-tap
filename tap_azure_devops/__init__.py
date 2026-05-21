@@ -636,8 +636,9 @@ def get_all_pull_requests(schemas, repo_path, state, mdata, start_date):
             return
         seen_pr_numbers.add(pr_number)
 
-        pr["id"] = f"{repo_path}-{pr_number}"
+        pr["id"] = f"{project}:{repo_name}:{pr_number}"
         pr["pr_number"] = pr_number
+        pr["repo_url"] = pr.get("repository", {}).get("remoteUrl")
         pr["_sdc_repository"] = repo_path
         pr["inserted_at"] = singer.utils.strftime(extraction_time)
         pr_id = pr["id"]
