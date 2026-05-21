@@ -726,7 +726,7 @@ def get_all_pull_requests(schemas, repo_path, state, mdata, start_date):
             if bookmark:
                 closed_params = {
                     "api-version": API_VERSION,
-                    "searchCriteria.status": "completed",
+                    "searchCriteria.status": "all",
                     "searchCriteria.queryTimeRangeType": "closed",
                     "searchCriteria.minTime": bookmark,
                     "$top": 100,
