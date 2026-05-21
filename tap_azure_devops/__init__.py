@@ -584,6 +584,14 @@ def get_pr_files_for_pr(pr_id, pr_number, repo_path, schema, mdata):
                 ))
                 file_diff = "".join(diff_lines) if diff_lines else None
 
+        additions, deletions = 0, 0
+        if file_diff:
+            for line in file_diff.splitlines():
+                if line.startswith("+") and not line.startswith("+++"):
+                    additions += 1
+                elif line.startswith("-") and not line.startswith("---"):
+                    deletions += 1
+
         record = {
             "id": f"{pr_id}-{last_iteration_id}-{entry.get('changeId')}",
             "pr_id": pr_id,
@@ -595,6 +603,8 @@ def get_pr_files_for_pr(pr_id, pr_number, repo_path, schema, mdata):
             "original_path": entry.get("originalPath"),
             "file_content": file_content,
             "file_diff": file_diff,
+            "additions": additions,
+            "deletions": deletions,
             "item": {
                 "objectId": item.get("objectId"),
                 "originalObjectId": item.get("originalObjectId"),
@@ -617,98 +627,115 @@ def get_all_pull_requests(schemas, repo_path, state, mdata, start_date):
     org = config_data["organization"]
 
     bookmark = get_bookmark(state, repo_path, "pull_requests", "since", start_date)
-    bookmark_time = singer.utils.strptime_to_utc(bookmark) if bookmark else None
-
     url = f"{BASE_URL}/{org}/{project}/_apis/git/repositories/{repo_name}/pullrequests"
-    params = {
-        "api-version": API_VERSION,
-        "searchCriteria.status": "all",
-        "$top": 100,
-    }
+    seen_pr_numbers = set()
+
+    def emit_pr(pr, extraction_time, counter):
+        pr_number = pr.get("pullRequestId")
+        if pr_number in seen_pr_numbers:
+            return
+        seen_pr_numbers.add(pr_number)
+
+        pr["id"] = f"{repo_path}-{pr_number}"
+        pr["pr_number"] = pr_number
+        pr["_sdc_repository"] = repo_path
+        pr["inserted_at"] = singer.utils.strftime(extraction_time)
+        pr_id = pr["id"]
+
+        with singer.Transformer() as transformer:
+            rec = transformer.transform(
+                pr,
+                schemas["pull_requests"],
+                metadata=metadata.to_map(mdata["pull_requests"]),
+            )
+        singer.write_record("pull_requests", rec, time_extracted=extraction_time)
+        counter.increment()
+
+        if schemas.get("pull_request_commits"):
+            for commit_rec in get_pr_commits_for_pr(
+                pr_id, pr_number, repo_path,
+                schemas["pull_request_commits"],
+                mdata["pull_request_commits"],
+            ):
+                singer.write_record(
+                    "pull_request_commits", commit_rec, time_extracted=extraction_time
+                )
+
+        if schemas.get("pull_request_threads"):
+            for thread_rec in get_pr_threads_for_pr(
+                pr_id, pr_number, repo_path,
+                schemas["pull_request_threads"],
+                mdata["pull_request_threads"],
+            ):
+                singer.write_record(
+                    "pull_request_threads", thread_rec, time_extracted=extraction_time
+                )
+
+        if schemas.get("pull_request_files") and pr.get("status") == "completed":
+            for file_rec in get_pr_files_for_pr(
+                pr_id, pr_number, repo_path,
+                schemas["pull_request_files"],
+                mdata["pull_request_files"],
+            ):
+                singer.write_record(
+                    "pull_request_files", file_rec, time_extracted=extraction_time
+                )
+
+        if schemas.get("pull_request_reviews"):
+            for review_rec in get_pr_reviews_for_pr(
+                pr_id, pr_number, repo_path,
+                schemas["pull_request_reviews"],
+                mdata["pull_request_reviews"],
+            ):
+                singer.write_record(
+                    "pull_request_reviews", review_rec, time_extracted=extraction_time
+                )
+
+        if schemas.get("pull_request_comments"):
+            for comment_rec in get_pr_comments_for_pr(
+                pr_id, pr_number, repo_path,
+                schemas["pull_request_comments"],
+                mdata["pull_request_comments"],
+            ):
+                singer.write_record(
+                    "pull_request_comments", comment_rec, time_extracted=extraction_time
+                )
+
+        singer.write_bookmark(
+            state, repo_path, "pull_requests",
+            {"since": singer.utils.strftime(extraction_time)},
+        )
 
     with metrics.record_counter("pull_requests") as counter:
         try:
+            # Call 1: all PRs created since bookmark
+            params = {
+                "api-version": API_VERSION,
+                "searchCriteria.status": "all",
+                "$top": 100,
+            }
+            if bookmark:
+                params["searchCriteria.minTime"] = bookmark
+
             for response in authed_get_all_pages("pull_requests", url, params):
                 extraction_time = singer.utils.now()
                 for pr in response.json().get("value", []):
-                    pr_updated = pr.get("closedDate") or pr.get("creationDate")
-                    if bookmark_time and pr_updated:
-                        try:
-                            if singer.utils.strptime_to_utc(pr_updated) < bookmark_time:
-                                continue
-                        except Exception:
-                            pass
+                    emit_pr(pr, extraction_time, counter)
 
-                    pr_number = pr.get("pullRequestId")
-                    pr["id"] = f"{repo_path}-{pr_number}"
-                    pr["pr_number"] = pr_number
-                    pr["_sdc_repository"] = repo_path
-                    pr["inserted_at"] = singer.utils.strftime(extraction_time)
-                    pr_id = pr["id"]
+            # Call 2: completed PRs closed since bookmark (catches old PRs closed recently)
+            if bookmark:
+                closed_params = {
+                    "api-version": API_VERSION,
+                    "searchCriteria.status": "completed",
+                    "searchCriteria.queryTimeRangeType": "closed",
+                    "searchCriteria.minTime": bookmark,
+                    "$top": 100,
+                }
+                for response in authed_get_all_pages("pull_requests", url, closed_params):
+                    extraction_time = singer.utils.now()
+                    for pr in response.json().get("value", []):
+                        emit_pr(pr, extraction_time, counter)
 
-                    with singer.Transformer() as transformer:
-                        rec = transformer.transform(
-                            pr,
-                            schemas["pull_requests"],
-                            metadata=metadata.to_map(mdata["pull_requests"]),
-                        )
-                    singer.write_record("pull_requests", rec, time_extracted=extraction_time)
-                    counter.increment()
-
-                    if schemas.get("pull_request_commits"):
-                        for commit_rec in get_pr_commits_for_pr(
-                            pr_id, pr_number, repo_path,
-                            schemas["pull_request_commits"],
-                            mdata["pull_request_commits"],
-                        ):
-                            singer.write_record(
-                                "pull_request_commits", commit_rec, time_extracted=extraction_time
-                            )
-
-                    if schemas.get("pull_request_threads"):
-                        for thread_rec in get_pr_threads_for_pr(
-                            pr_id, pr_number, repo_path,
-                            schemas["pull_request_threads"],
-                            mdata["pull_request_threads"],
-                        ):
-                            singer.write_record(
-                                "pull_request_threads", thread_rec, time_extracted=extraction_time
-                            )
-
-                    if schemas.get("pull_request_files"):
-                        for file_rec in get_pr_files_for_pr(
-                            pr_id, pr_number, repo_path,
-                            schemas["pull_request_files"],
-                            mdata["pull_request_files"],
-                        ):
-                            singer.write_record(
-                                "pull_request_files", file_rec, time_extracted=extraction_time
-                            )
-
-                    if schemas.get("pull_request_reviews"):
-                        for review_rec in get_pr_reviews_for_pr(
-                            pr_id, pr_number, repo_path,
-                            schemas["pull_request_reviews"],
-                            mdata["pull_request_reviews"],
-                        ):
-                            singer.write_record(
-                                "pull_request_reviews", review_rec, time_extracted=extraction_time
-                            )
-
-                    if schemas.get("pull_request_comments"):
-                        for comment_rec in get_pr_comments_for_pr(
-                            pr_id, pr_number, repo_path,
-                            schemas["pull_request_comments"],
-                            mdata["pull_request_comments"],
-                        ):
-                            singer.write_record(
-                                "pull_request_comments", comment_rec, time_extracted=extraction_time
-                            )
-
-                    singer.write_bookmark(
-                        state, repo_path, "pull_requests",
-                        {"since": singer.utils.strftime(extraction_time)},
-                    )
         except NotFoundException:
             logger.warning("Repository %s not found, skipping pull requests", repo_path)
     return state
