@@ -587,9 +587,9 @@ def get_pr_files_for_pr(pr_id, pr_number, repo_path, schema, mdata):
         additions, deletions = 0, 0
         if file_diff:
             for line in file_diff.splitlines():
-                if line.startswith("+") and not line.startswith("+++"):
+                if line.startswith("+") and line != f"+++ b{file_path}":
                     additions += 1
-                elif line.startswith("-") and not line.startswith("---"):
+                elif line.startswith("-") and line != f"--- a{file_path}":
                     deletions += 1
 
         record = {
