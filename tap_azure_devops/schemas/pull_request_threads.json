@@ -61,6 +61,7 @@
         }
       }
     },
+    "vote": { "type": ["null", "integer"] },
     "inserted_at": { "type": ["string"], "format": "date-time" }
   }
 }
