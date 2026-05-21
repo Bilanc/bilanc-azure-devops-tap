@@ -13,6 +13,8 @@
     "original_path": { "type": ["null", "string"] },
     "file_content": { "type": ["null", "string"] },
     "file_diff": { "type": ["null", "string"] },
+    "additions": { "type": ["null", "integer"] },
+    "deletions": { "type": ["null", "integer"] },
     "item": {
       "type": ["null", "object"],
       "additionalProperties": false,
