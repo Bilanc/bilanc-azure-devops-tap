@@ -436,6 +436,7 @@ def get_pr_threads_for_pr(pr_id, pr_number, repo_path, schema, mdata):
                 thread["pr_id"] = pr_id
                 thread["pr_number"] = pr_number
                 thread["inserted_at"] = singer.utils.strftime(singer.utils.now())
+                thread["threadType"] = (thread.get("properties") or {}).get("CodeReviewThreadType", {}).get("$value")
                 with singer.Transformer() as transformer:
                     rec = transformer.transform(thread, schema, metadata=metadata.to_map(mdata))
                 yield rec
