@@ -906,7 +906,7 @@ def get_all_user_entitlements(schema, org, state, mdata, start_date):
             body = response.json()
             extraction_time = singer.utils.now()
 
-            for member in body.get("value", []):
+            for member in body.get("items", []):
                 user = member.get("user") or {}
                 access = member.get("accessLevel") or {}
                 record = {
