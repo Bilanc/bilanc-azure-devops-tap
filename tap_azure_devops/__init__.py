@@ -641,6 +641,7 @@ def get_all_pull_requests(schemas, repo_path, state, mdata, start_date):
         pr["id"] = f"{project}:{repo_name}:{pr_number}"
         pr["pr_number"] = pr_number
         pr["repo_url"] = pr.get("repository", {}).get("remoteUrl")
+        pr["browser_url"] = f"https://dev.azure.com/{org}/{project}/_git/{repo_name}/pullrequest/{pr_number}"
         pr["_sdc_repository"] = repo_path
         pr["inserted_at"] = singer.utils.strftime(extraction_time)
         pr_id = pr["id"]

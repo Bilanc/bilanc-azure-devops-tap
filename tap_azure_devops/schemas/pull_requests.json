@@ -17,6 +17,7 @@
     "mergeId": { "type": ["null", "string"] },
     "supportsIterations": { "type": ["null", "boolean"] },
     "url": { "type": ["null", "string"] },
+    "browser_url": { "type": ["null", "string"] },
     "repo_url": { "type": ["null", "string"] },
     "creationDate": { "type": ["null", "string"], "format": "date-time" },
     "closedDate": { "type": ["null", "string"], "format": "date-time" },
