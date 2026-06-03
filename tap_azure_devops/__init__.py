@@ -25,6 +25,11 @@ REQUIRED_CONFIG_KEYS = ["start_date", "organization"]
 config_data = {}
 is_nango_token = False
 
+# Shared cache for individual commit stats (parents + changes).
+# Keyed by (repo_path, commitId) so commits and pull_request_commits
+# never hit the same endpoint twice in a single sync run.
+_commit_stats_cache: dict = {}
+
 KEY_PROPERTIES = {
     "repositories": ["id"],
     "commits": ["commitId"],
@@ -364,6 +369,48 @@ def get_all_repositories(schema, project, state, mdata, start_date):
     return state
 
 
+def fetch_commit_stats(repo_path, commit_id):
+    cache_key = (repo_path, commit_id)
+    if cache_key in _commit_stats_cache:
+        return _commit_stats_cache[cache_key]
+
+    project, repo_name = repo_path.split("/", 1)
+    org = config_data["organization"]
+    params = {"api-version": API_VERSION}
+
+    parents = None
+    changes = None
+
+    try:
+        commit_url = f"{BASE_URL}/{org}/{project}/_apis/git/repositories/{repo_name}/commits/{commit_id}"
+        data = authed_get("commits", commit_url, params).json()
+        parents = data.get("parents")
+    except NotFoundException:
+        pass
+
+    try:
+        changes_url = f"{BASE_URL}/{org}/{project}/_apis/git/repositories/{repo_name}/commits/{commit_id}/changes"
+        changes_data = authed_get("commit_changes", changes_url, params).json()
+        changes = changes_data.get("changes")
+    except NotFoundException:
+        pass
+
+    stats = {"parents": parents, "changes": changes}
+    _commit_stats_cache[cache_key] = stats
+    return stats
+
+
+def get_default_branch(project, repo_name):
+    org = config_data["organization"]
+    url = f"{BASE_URL}/{org}/{project}/_apis/git/repositories/{repo_name}"
+    try:
+        data = authed_get("commits", url, {"api-version": API_VERSION}).json()
+        ref = data.get("defaultBranch", "")
+        return ref.removeprefix("refs/heads/") or None
+    except NotFoundException:
+        return None
+
+
 def get_all_commits(schema, repo_path, state, mdata, start_date):
     project, repo_name = repo_path.split("/", 1)
     org = config_data["organization"]
@@ -372,6 +419,13 @@ def get_all_commits(schema, repo_path, state, mdata, start_date):
     params = {"api-version": API_VERSION, "$top": 100}
     if bookmark:
         params["searchCriteria.fromDate"] = bookmark
+
+    default_branch = get_default_branch(project, repo_name)
+    if not default_branch:
+        logger.warning("No default branch found for %s, skipping commits", repo_path)
+        return state
+    params["searchCriteria.itemVersion.version"] = default_branch
+    params["searchCriteria.itemVersion.versionType"] = "branch"
 
     url = f"{BASE_URL}/{org}/{project}/_apis/git/repositories/{repo_name}/commits"
 
@@ -383,6 +437,7 @@ def get_all_commits(schema, repo_path, state, mdata, start_date):
                 for commit in response.json().get("value", []):
                     commit["_sdc_repository"] = repo_path
                     commit["inserted_at"] = singer.utils.strftime(extraction_time)
+                    commit.update(fetch_commit_stats(repo_path, commit["commitId"]))
                     commit_date = (
                         (commit.get("author") or {}).get("date")
                         or (commit.get("committer") or {}).get("date")
@@ -414,6 +469,7 @@ def get_pr_commits_for_pr(pr_id, pr_number, repo_path, schema, mdata):
                 commit["pr_number"] = pr_number
                 commit["id"] = f"{pr_id}-{commit['commitId']}"
                 commit["inserted_at"] = singer.utils.strftime(singer.utils.now())
+                commit.update(fetch_commit_stats(repo_path, commit["commitId"]))
                 with singer.Transformer() as transformer:
                     rec = transformer.transform(commit, schema, metadata=metadata.to_map(mdata))
                 yield rec

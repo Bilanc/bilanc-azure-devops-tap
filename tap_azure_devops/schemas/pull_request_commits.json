@@ -38,6 +38,29 @@
         "Delete": { "type": ["null", "integer"] }
       }
     },
+    "parents": {
+      "type": ["null", "array"],
+      "items": { "type": ["null", "string"] }
+    },
+    "changes": {
+      "type": ["null", "array"],
+      "items": {
+        "type": ["null", "object"],
+        "additionalProperties": true,
+        "properties": {
+          "item": {
+            "type": ["null", "object"],
+            "additionalProperties": true,
+            "properties": {
+              "objectId": { "type": ["null", "string"] },
+              "path": { "type": ["null", "string"] },
+              "url": { "type": ["null", "string"] }
+            }
+          },
+          "changeType": { "type": ["null", "string"] }
+        }
+      }
+    },
     "inserted_at": { "type": ["string"], "format": "date-time" }
   }
 }
