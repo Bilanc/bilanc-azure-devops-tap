@@ -390,8 +390,17 @@ def fetch_commit_stats(repo_path, commit_id):
 
     try:
         changes_url = f"{BASE_URL}/{org}/{project}/_apis/git/repositories/{repo_name}/commits/{commit_id}/changes"
-        changes_data = authed_get("commit_changes", changes_url, params).json()
-        changes = changes_data.get("changes")
+        page_size = 100
+        changes = []
+        skip = 0
+        while True:
+            page_params = dict(params, **{"$top": page_size, "$skip": skip})
+            changes_data = authed_get("commit_changes", changes_url, page_params).json()
+            page = changes_data.get("changes", [])
+            changes.extend(page)
+            if len(page) < page_size:
+                break
+            skip += page_size
     except NotFoundException:
         pass
 
