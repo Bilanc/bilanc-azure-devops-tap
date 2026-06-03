@@ -376,18 +376,26 @@ def fetch_commit_stats(repo_path, commit_id):
 
     project, repo_name = repo_path.split("/", 1)
     org = config_data["organization"]
-    url = f"{BASE_URL}/{org}/{project}/_apis/git/repositories/{repo_name}/commits/{commit_id}"
     params = {"api-version": API_VERSION}
 
-    try:
-        data = authed_get("commits", url, params).json()
-        stats = {
-            "parents": data.get("parents"),
-            "changes": data.get("changes"),
-        }
-    except NotFoundException:
-        stats = {"parents": None, "changes": None}
+    parents = None
+    changes = None
 
+    try:
+        commit_url = f"{BASE_URL}/{org}/{project}/_apis/git/repositories/{repo_name}/commits/{commit_id}"
+        data = authed_get("commits", commit_url, params).json()
+        parents = data.get("parents")
+    except NotFoundException:
+        pass
+
+    try:
+        changes_url = f"{BASE_URL}/{org}/{project}/_apis/git/repositories/{repo_name}/commits/{commit_id}/changes"
+        changes_data = authed_get("commit_changes", changes_url, params).json()
+        changes = changes_data.get("changes")
+    except NotFoundException:
+        pass
+
+    stats = {"parents": parents, "changes": changes}
     _commit_stats_cache[cache_key] = stats
     return stats
 
@@ -413,9 +421,11 @@ def get_all_commits(schema, repo_path, state, mdata, start_date):
         params["searchCriteria.fromDate"] = bookmark
 
     default_branch = get_default_branch(project, repo_name)
-    if default_branch:
-        params["searchCriteria.itemVersion.version"] = default_branch
-        params["searchCriteria.itemVersion.versionType"] = "branch"
+    if not default_branch:
+        logger.warning("No default branch found for %s, skipping commits", repo_path)
+        return state
+    params["searchCriteria.itemVersion.version"] = default_branch
+    params["searchCriteria.itemVersion.versionType"] = "branch"
 
     url = f"{BASE_URL}/{org}/{project}/_apis/git/repositories/{repo_name}/commits"
 
