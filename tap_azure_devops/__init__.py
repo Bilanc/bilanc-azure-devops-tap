@@ -30,6 +30,11 @@ is_nango_token = False
 # never hit the same endpoint twice in a single sync run.
 _commit_stats_cache: dict = {}
 
+# Shared cache for PR threads.
+# Keyed by (repo_path, pr_number) so pull_request_threads and
+# pull_request_comments never re-fetch the same pages.
+_pr_threads_cache: dict = {}
+
 KEY_PROPERTIES = {
     "repositories": ["id"],
     "commits": ["commitId"],
@@ -477,28 +482,38 @@ def get_pr_commits_for_pr(pr_id, pr_number, repo_path, schema, mdata):
         logger.warning("PR %s commits not found, skipping", pr_number)
 
 
-def get_pr_threads_for_pr(pr_id, pr_number, repo_path, schema, mdata):
+def fetch_pr_threads(repo_path, pr_number):
+    cache_key = (repo_path, pr_number)
+    if cache_key in _pr_threads_cache:
+        return _pr_threads_cache[cache_key]
+
     project, repo_name = repo_path.split("/", 1)
     org = config_data["organization"]
     url = f"{BASE_URL}/{org}/{project}/_apis/git/repositories/{repo_name}/pullRequests/{pr_number}/threads"
-    params = {"api-version": API_VERSION}
-
+    threads = []
     try:
-        for response in authed_get_all_pages("pull_request_threads", url, params):
-            for thread in response.json().get("value", []):
-                thread["thread_id"] = thread["id"]
-                thread["id"] = f"{pr_id}-{thread['id']}"
-                thread["_sdc_repository"] = repo_path
-                thread["pr_id"] = pr_id
-                thread["pr_number"] = pr_number
-                thread["inserted_at"] = singer.utils.strftime(singer.utils.now())
-                thread["threadType"] = (thread.get("properties") or {}).get("CodeReviewThreadType", {}).get("$value")
-                thread["vote"] = (thread.get("properties") or {}).get("CodeReviewVoteResult", {}).get("$value")
-                with singer.Transformer() as transformer:
-                    rec = transformer.transform(thread, schema, metadata=metadata.to_map(mdata))
-                yield rec
+        threads = authed_get("pull_request_threads", url, {"api-version": API_VERSION}).json().get("value", [])
     except NotFoundException:
         logger.warning("PR %s threads not found, skipping", pr_number)
+
+    _pr_threads_cache[cache_key] = threads
+    return threads
+
+
+def get_pr_threads_for_pr(pr_id, pr_number, repo_path, schema, mdata):
+    for thread in fetch_pr_threads(repo_path, pr_number):
+        thread = dict(thread)
+        thread["thread_id"] = thread["id"]
+        thread["id"] = f"{pr_id}-{thread['id']}"
+        thread["_sdc_repository"] = repo_path
+        thread["pr_id"] = pr_id
+        thread["pr_number"] = pr_number
+        thread["inserted_at"] = singer.utils.strftime(singer.utils.now())
+        thread["threadType"] = (thread.get("properties") or {}).get("CodeReviewThreadType", {}).get("$value")
+        thread["vote"] = (thread.get("properties") or {}).get("CodeReviewVoteResult", {}).get("$value")
+        with singer.Transformer() as transformer:
+            rec = transformer.transform(thread, schema, metadata=metadata.to_map(mdata))
+        yield rec
 
 
 def get_pr_reviews_for_pr(pr_id, pr_number, repo_path, schema, mdata):
@@ -533,43 +548,35 @@ def get_pr_reviews_for_pr(pr_id, pr_number, repo_path, schema, mdata):
 
 
 def get_pr_comments_for_pr(pr_id, pr_number, repo_path, schema, mdata):
-    project, repo_name = repo_path.split("/", 1)
-    org = config_data["organization"]
-    url = f"{BASE_URL}/{org}/{project}/_apis/git/repositories/{repo_name}/pullRequests/{pr_number}/threads?api-version={API_VERSION}"
-
-    try:
-        for response in authed_get_all_pages("pull_request_comments", url):
-            for thread in response.json().get("value", []):
-                thread_id = thread.get("id")
-                thread_status = thread.get("status")
-                file_path = (thread.get("threadContext") or {}).get("filePath")
-                for comment in thread.get("comments", []):
-                    author = comment.get("author") or {}
-                    record = {
-                        "id": f"{pr_id}-{thread_id}-{comment.get('id')}",
-                        "pr_id": pr_id,
-                        "pr_number": pr_number,
-                        "thread_id": thread_id,
-                        "comment_id": comment.get("id"),
-                        "parent_comment_id": comment.get("parentCommentId"),
-                        "content": comment.get("content"),
-                        "comment_type": comment.get("commentType"),
-                        "published_date": comment.get("publishedDate"),
-                        "last_updated_date": comment.get("lastUpdatedDate"),
-                        "last_content_updated_date": comment.get("lastContentUpdatedDate"),
-                        "author_id": author.get("id"),
-                        "author_display_name": author.get("displayName"),
-                        "author_unique_name": author.get("uniqueName"),
-                        "thread_status": thread_status,
-                        "file_path": file_path,
-                        "_sdc_repository": repo_path,
-                        "inserted_at": singer.utils.strftime(singer.utils.now()),
-                    }
-                    with singer.Transformer() as transformer:
-                        rec = transformer.transform(record, schema, metadata=metadata.to_map(mdata))
-                    yield rec
-    except NotFoundException:
-        logger.warning("PR %s threads not found for comments, skipping", pr_number)
+    for thread in fetch_pr_threads(repo_path, pr_number):
+        thread_id = thread.get("id")
+        thread_status = thread.get("status")
+        file_path = (thread.get("threadContext") or {}).get("filePath")
+        for comment in thread.get("comments", []):
+            author = comment.get("author") or {}
+            record = {
+                "id": f"{pr_id}-{thread_id}-{comment.get('id')}",
+                "pr_id": pr_id,
+                "pr_number": pr_number,
+                "thread_id": thread_id,
+                "comment_id": comment.get("id"),
+                "parent_comment_id": comment.get("parentCommentId"),
+                "content": comment.get("content"),
+                "comment_type": comment.get("commentType"),
+                "published_date": comment.get("publishedDate"),
+                "last_updated_date": comment.get("lastUpdatedDate"),
+                "last_content_updated_date": comment.get("lastContentUpdatedDate"),
+                "author_id": author.get("id"),
+                "author_display_name": author.get("displayName"),
+                "author_unique_name": author.get("uniqueName"),
+                "thread_status": thread_status,
+                "file_path": file_path,
+                "_sdc_repository": repo_path,
+                "inserted_at": singer.utils.strftime(singer.utils.now()),
+            }
+            with singer.Transformer() as transformer:
+                rec = transformer.transform(record, schema, metadata=metadata.to_map(mdata))
+            yield rec
 
 
 def get_blob_content(repo_path, object_id):
