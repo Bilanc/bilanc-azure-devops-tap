@@ -675,7 +675,13 @@ def get_pr_files_for_pr(pr_id, pr_number, repo_path, schema, mdata):
                 file_content = get_blob_content(repo_path, object_id)
             before = get_blob_content(repo_path, original_object_id) if original_object_id else ""
             after = file_content or ""
-            if before or after:
+            # Only compute a diff when both sides have actual content (not
+            # None from a skipped/oversized blob).  A None value means the
+            # blob was intentionally not downloaded, so producing a diff
+            # would yield misleading additions/deletions.
+            before_available = before is not None
+            after_available = file_content is not None or is_deleted or not object_id
+            if (before or after) and before_available and after_available:
                 file_path = item.get("path", "")
                 diff_lines = list(difflib.unified_diff(
                     (before or "").splitlines(keepends=True),
