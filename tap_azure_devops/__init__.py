@@ -606,23 +606,20 @@ def get_blob_content(repo_path, object_id):
                 )
                 return None
 
-            # No Content-Length (e.g. chunked): read incrementally and abort
-            # once we exceed the limit, so we still never buffer a huge file.
-            if content_length is None:
-                chunks = []
-                total = 0
-                for chunk in resp.iter_content(chunk_size=65536):
-                    total += len(chunk)
-                    if total > max_size:
-                        logger.warning(
-                            "Skipping blob %s: streamed size exceeds max %s bytes",
-                            object_id, max_size,
-                        )
-                        return None
-                    chunks.append(chunk)
-                return b"".join(chunks).decode(resp.encoding or "utf-8", errors="replace")
-
-            return resp.text
+            # Stream the body and abort once decoded bytes exceed the limit,
+            # so we never buffer more than max_size regardless of encoding.
+            chunks = []
+            total = 0
+            for chunk in resp.iter_content(chunk_size=65536):
+                total += len(chunk)
+                if total > max_size:
+                    logger.warning(
+                        "Skipping blob %s: streamed size exceeds max %s bytes",
+                        object_id, max_size,
+                    )
+                    return None
+                chunks.append(chunk)
+            return b"".join(chunks).decode(resp.encoding or "utf-8", errors="replace")
         finally:
             resp.close()
     except Exception as e:
