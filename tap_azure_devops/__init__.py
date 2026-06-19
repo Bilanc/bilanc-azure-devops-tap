@@ -1024,6 +1024,15 @@ def get_all_pipelines(schema, project, state, mdata, start_date):
     return state
 
 
+def _clean_dt(value):
+    # Azure DevOps returns the sentinel "0001-01-01T00:00:00Z" for dates that
+    # were never set (e.g. users who have never accessed). These aren't real
+    # timestamps and break the target's timestamp columns, so normalize to null.
+    if not value or value.startswith("0001-01-01"):
+        return None
+    return value
+
+
 def get_all_user_entitlements(schema, org, state, mdata, start_date):
     url = f"{VSAEX_BASE_URL}/{org}/_apis/userentitlements"
     params = {"api-version": API_VERSION, "top": 100}
@@ -1059,8 +1068,8 @@ def get_all_user_entitlements(schema, org, state, mdata, start_date):
                     "licensing_source": access.get("licensingSource"),
                     "assignment_source": access.get("assignmentSource"),
                     "license_status": access.get("status"),
-                    "last_accessed_date": member.get("lastAccessedDate"),
-                    "date_created": member.get("dateCreated"),
+                    "last_accessed_date": _clean_dt(member.get("lastAccessedDate")),
+                    "date_created": _clean_dt(member.get("dateCreated")),
                     "_sdc_organization": org,
                     "inserted_at": singer.utils.strftime(extraction_time),
                 }
