@@ -19,6 +19,9 @@ BASE_URL = "https://dev.azure.com"
 VSAEX_BASE_URL = "https://vsaex.dev.azure.com"
 API_VERSION = "7.1"
 REQUEST_TIMEOUT = 300
+# Maximum size (in bytes) of a single file blob we will download into memory.
+# Blobs larger than this are skipped to avoid blowing up the process memory.
+MAX_BLOB_SIZE = 1_000_000
 REQUIRED_CONFIG_KEYS = ["start_date", "organization"]
 
 # Set once in main(), used throughout
@@ -125,6 +128,10 @@ def get_request_timeout():
     return float(config_data.get("request_timeout", REQUEST_TIMEOUT))
 
 
+def get_max_blob_size():
+    return int(config_data.get("max_file_blob_size", MAX_BLOB_SIZE))
+
+
 def get_auth_header():
     access_token = config_data["access_token"]
     if is_nango_token:
@@ -183,7 +190,7 @@ def calculate_wait_time(response):
     max_tries=10,
     factor=2,
 )
-def authed_get(source, url, params=None, method="get", json_body=None):
+def authed_get(source, url, params=None, method="get", json_body=None, stream=False):
     with metrics.http_request_timer(source) as timer:
         session.headers.update(get_auth_header())
         logger.info("Making %s request to %s", method.upper(), url)
@@ -193,6 +200,7 @@ def authed_get(source, url, params=None, method="get", json_body=None):
             params=params,
             json=json_body,
             timeout=get_request_timeout(),
+            stream=stream,
         )
         logger.info("Response status: %s", resp.status_code)
         timer.tags[metrics.Tag.http_status_code] = resp.status_code
@@ -583,9 +591,37 @@ def get_blob_content(repo_path, object_id):
     project, repo_name = repo_path.split("/", 1)
     org = config_data["organization"]
     url = f"{BASE_URL}/{org}/{project}/_apis/git/repositories/{repo_name}/blobs/{object_id}?api-version={API_VERSION}&$format=text"
+    max_size = get_max_blob_size()
     try:
-        resp = authed_get("blob_content", url)
-        return resp.text
+        resp = authed_get("blob_content", url, stream=True)
+        try:
+            # Skip blobs larger than the configured limit so a single huge file
+            # cannot exhaust process memory. Inspect Content-Length before
+            # reading the body so the bytes are never downloaded.
+            content_length = resp.headers.get("Content-Length")
+            if content_length is not None and int(content_length) > max_size:
+                logger.warning(
+                    "Skipping blob %s: size %s exceeds max %s bytes",
+                    object_id, content_length, max_size,
+                )
+                return None
+
+            # Stream the body and abort once decoded bytes exceed the limit,
+            # so we never buffer more than max_size regardless of encoding.
+            chunks = []
+            total = 0
+            for chunk in resp.iter_content(chunk_size=65536):
+                total += len(chunk)
+                if total > max_size:
+                    logger.warning(
+                        "Skipping blob %s: streamed size exceeds max %s bytes",
+                        object_id, max_size,
+                    )
+                    return None
+                chunks.append(chunk)
+            return b"".join(chunks).decode(resp.encoding or "utf-8", errors="replace")
+        finally:
+            resp.close()
     except Exception as e:
         logger.warning("Could not fetch blob %s: %s", object_id, e)
         return None
