@@ -219,9 +219,29 @@ def authed_get_all_pages(source, url, params=None):
     top = int(params.get("$top", 100))
     skip = 0
     seen_continuation_token = False
+    advancing_by_skip = False
+    prev_value = None
 
     while True:
         r = authed_get(source, url, params)
+
+        # Guard against endpoints that ignore $skip and return the full
+        # collection on every call (e.g. List Repositories). If we just
+        # advanced $skip but got back the same page, paging isn't honored —
+        # stop before re-yielding the duplicate, or we loop forever.
+        if advancing_by_skip:
+            try:
+                value = r.json().get("value")
+            except (ValueError, AttributeError):
+                value = None
+            if value is not None and value == prev_value:
+                logger.warning(
+                    "%s endpoint does not honor $skip paging (page at $skip=%s "
+                    "repeated previous page); stopping to avoid an infinite loop",
+                    source, skip,
+                )
+                break
+
         yield r
 
         continuation_token = r.headers.get("x-ms-continuationtoken")
@@ -229,17 +249,21 @@ def authed_get_all_pages(source, url, params=None):
             seen_continuation_token = True
             params["continuationToken"] = continuation_token
             params.pop("$skip", None)
+            advancing_by_skip = False
             continue
 
         if seen_continuation_token:
             break
 
         try:
-            count = r.json().get("count", 0)
+            body = r.json()
+            count = body.get("count", 0)
             if count < top:
                 break
+            prev_value = body.get("value")
             skip += top
             params["$skip"] = skip
+            advancing_by_skip = True
         except (ValueError, AttributeError):
             break
 
@@ -252,9 +276,12 @@ def get_all_repos_in_project(project):
     params = {"api-version": API_VERSION}
     repos = []
     try:
-        for response in authed_get_all_pages("repositories_discovery", url, params):
-            for repo in response.json().get("value", []):
-                repos.append(f"{project}/{repo['name']}")
+        # The repositories list endpoint is not pageable: it returns the full
+        # collection in a single response and ignores $top/$skip. Fetch once —
+        # paging it would loop forever once a project has >= $top repos.
+        response = authed_get("repositories_discovery", url, params)
+        for repo in response.json().get("value", []):
+            repos.append(f"{project}/{repo['name']}")
     except NotFoundException:
         logger.warning("Project %s not found during repo discovery", project)
     return repos
@@ -365,18 +392,21 @@ def get_all_repositories(schema, project, state, mdata, start_date):
 
     with metrics.record_counter("repositories") as counter:
         try:
-            for response in authed_get_all_pages("repositories", url, params):
-                extraction_time = singer.utils.now()
-                for repo in response.json().get("value", []):
-                    repo["_sdc_repository"] = f"{project}/{repo['name']}"
-                    repo["_sdc_project"] = project
-                    repo["project_id"] = repo.get("project", {}).get("id")
-                    repo["project_name"] = repo.get("project", {}).get("name")
-                    repo["inserted_at"] = singer.utils.strftime(extraction_time)
-                    with singer.Transformer() as transformer:
-                        rec = transformer.transform(repo, schema, metadata=metadata.to_map(mdata))
-                    singer.write_record("repositories", rec, time_extracted=extraction_time)
-                    counter.increment()
+            # The repositories list endpoint is not pageable: it returns the full
+            # collection in a single response and ignores $top/$skip. Fetch once —
+            # paging it would loop forever once a project has >= $top repos.
+            response = authed_get("repositories", url, params)
+            extraction_time = singer.utils.now()
+            for repo in response.json().get("value", []):
+                repo["_sdc_repository"] = f"{project}/{repo['name']}"
+                repo["_sdc_project"] = project
+                repo["project_id"] = repo.get("project", {}).get("id")
+                repo["project_name"] = repo.get("project", {}).get("name")
+                repo["inserted_at"] = singer.utils.strftime(extraction_time)
+                with singer.Transformer() as transformer:
+                    rec = transformer.transform(repo, schema, metadata=metadata.to_map(mdata))
+                singer.write_record("repositories", rec, time_extracted=extraction_time)
+                counter.increment()
         except NotFoundException:
             logger.warning("Project %s not found, skipping repositories", project)
     return state
