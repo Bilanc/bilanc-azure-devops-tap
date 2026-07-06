@@ -676,7 +676,8 @@ def get_blob_content(repo_path, object_id):
         return cached
 
     content = _fetch_blob_content(repo_path, object_id)
-    _blob_content_cache.put(cache_key, content)
+    if content is not None:
+        _blob_content_cache.put(cache_key, content)
     return content
 
 
@@ -746,7 +747,7 @@ def compute_diff_stats(repo_path, changes):
             continue
 
         change_type = change.get("changeType") or ""
-        is_deleted = "delete" in change_type.lower()
+        is_deleted = change_type.lower() == "delete"
 
         object_id = item.get("objectId")
         original_object_id = item.get("originalObjectId")
