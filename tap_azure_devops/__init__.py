@@ -1007,69 +1007,36 @@ def get_work_item_updates_for_item(work_item_id, project, schema, mdata):
     url = f"{BASE_URL}/{org}/{project}/_apis/wit/workItems/{work_item_id}/updates"
     params = {"api-version": API_VERSION, "$top": 200}
 
-    try:
-        for response in authed_get_all_pages("work_item_updates", url, params):
-            for update in response.json().get("value", []):
-                fields = update.get("fields") or {}
-                if not fields:
-                    # Revisions that only touch relations/links carry no field
-                    # changes — nothing to emit for a changelog.
+    # Errors propagate to get_all_work_items, which owns the single skip/fail
+    # boundary for the whole work_items stream.
+    for response in authed_get_all_pages("work_item_updates", url, params):
+        for update in response.json().get("value", []):
+            fields = update.get("fields") or {}
+            if not fields:
+                # Revisions that only touch relations/links carry no field
+                # changes — nothing to emit for a changelog.
+                continue
+            revised_by = update.get("revisedBy") or {}
+            # The tip revision reports revisedDate as the 9999 sentinel; the
+            # real timestamp lives in the System.ChangedDate change instead.
+            revised_date = (
+                _clean_dt((fields.get("System.ChangedDate") or {}).get("newValue"))
+                or _clean_dt(update.get("revisedDate"))
+            )
+            for field_name, change in fields.items():
+                if not isinstance(change, dict):
                     continue
-                revised_by = update.get("revisedBy") or {}
-                # The tip revision reports revisedDate as the 9999 sentinel; the
-                # real timestamp lives in the System.ChangedDate change instead.
-                revised_date = (
-                    _clean_dt((fields.get("System.ChangedDate") or {}).get("newValue"))
-                    or _clean_dt(update.get("revisedDate"))
-                )
-                for field_name, change in fields.items():
-                    if not isinstance(change, dict):
-                        continue
-                    record = {
-                        "id": f"{work_item_id}-{update.get('id')}-{field_name}",
-                        "work_item_id": work_item_id,
-                        "update_id": update.get("id"),
-                        "rev": update.get("rev"),
-                        "revised_date": revised_date,
-                        "revised_by_display_name": revised_by.get("displayName"),
-                        "revised_by_unique_name": revised_by.get("uniqueName"),
-                        "field": field_name,
-                        "old_value": _stringify_wi_value(change.get("oldValue")),
-                        "new_value": _stringify_wi_value(change.get("newValue")),
-                        "_sdc_repository": project,
-                        "inserted_at": singer.utils.strftime(singer.utils.now()),
-                    }
-                    with singer.Transformer() as transformer:
-                        rec = transformer.transform(record, schema, metadata=metadata.to_map(mdata))
-                    yield rec
-    except WORK_ITEM_SKIP_EXCEPTIONS as e:
-        logger.warning("Updates for work item %s not accessible, skipping: %s", work_item_id, e)
-
-
-def get_work_item_comments_for_item(work_item_id, project, schema, mdata):
-    org = config_data["organization"]
-    url = f"{BASE_URL}/{org}/{project}/_apis/wit/workItems/{work_item_id}/comments"
-    params = {"api-version": WIT_COMMENTS_API_VERSION, "$top": 200}
-
-    try:
-        while True:
-            body = authed_get("work_item_comments", url, params).json()
-            for comment in body.get("comments", []):
-                created_by = comment.get("createdBy") or {}
-                modified_by = comment.get("modifiedBy") or {}
                 record = {
-                    "id": f"{work_item_id}-{comment.get('id')}",
+                    "id": f"{work_item_id}-{update.get('id')}-{field_name}",
                     "work_item_id": work_item_id,
-                    "comment_id": comment.get("id"),
-                    "version": comment.get("version"),
-                    "text": comment.get("text"),
-                    "created_date": comment.get("createdDate"),
-                    "created_by_display_name": created_by.get("displayName"),
-                    "created_by_unique_name": created_by.get("uniqueName"),
-                    "modified_date": comment.get("modifiedDate"),
-                    "modified_by_display_name": modified_by.get("displayName"),
-                    "modified_by_unique_name": modified_by.get("uniqueName"),
-                    "url": comment.get("url"),
+                    "update_id": update.get("id"),
+                    "rev": update.get("rev"),
+                    "revised_date": revised_date,
+                    "revised_by_display_name": revised_by.get("displayName"),
+                    "revised_by_unique_name": revised_by.get("uniqueName"),
+                    "field": field_name,
+                    "old_value": _stringify_wi_value(change.get("oldValue")),
+                    "new_value": _stringify_wi_value(change.get("newValue")),
                     "_sdc_repository": project,
                     "inserted_at": singer.utils.strftime(singer.utils.now()),
                 }
@@ -1077,12 +1044,43 @@ def get_work_item_comments_for_item(work_item_id, project, schema, mdata):
                     rec = transformer.transform(record, schema, metadata=metadata.to_map(mdata))
                 yield rec
 
-            continuation_token = body.get("continuationToken")
-            if not continuation_token:
-                break
-            params["continuationToken"] = continuation_token
-    except WORK_ITEM_SKIP_EXCEPTIONS as e:
-        logger.warning("Comments for work item %s not accessible, skipping: %s", work_item_id, e)
+
+def get_work_item_comments_for_item(work_item_id, project, schema, mdata):
+    org = config_data["organization"]
+    url = f"{BASE_URL}/{org}/{project}/_apis/wit/workItems/{work_item_id}/comments"
+    params = {"api-version": WIT_COMMENTS_API_VERSION, "$top": 200}
+
+    # Errors propagate to get_all_work_items, which owns the single skip/fail
+    # boundary for the whole work_items stream.
+    while True:
+        body = authed_get("work_item_comments", url, params).json()
+        for comment in body.get("comments", []):
+            created_by = comment.get("createdBy") or {}
+            modified_by = comment.get("modifiedBy") or {}
+            record = {
+                "id": f"{work_item_id}-{comment.get('id')}",
+                "work_item_id": work_item_id,
+                "comment_id": comment.get("id"),
+                "version": comment.get("version"),
+                "text": comment.get("text"),
+                "created_date": comment.get("createdDate"),
+                "created_by_display_name": created_by.get("displayName"),
+                "created_by_unique_name": created_by.get("uniqueName"),
+                "modified_date": comment.get("modifiedDate"),
+                "modified_by_display_name": modified_by.get("displayName"),
+                "modified_by_unique_name": modified_by.get("uniqueName"),
+                "url": comment.get("url"),
+                "_sdc_repository": project,
+                "inserted_at": singer.utils.strftime(singer.utils.now()),
+            }
+            with singer.Transformer() as transformer:
+                rec = transformer.transform(record, schema, metadata=metadata.to_map(mdata))
+            yield rec
+
+        continuation_token = body.get("continuationToken")
+        if not continuation_token:
+            break
+        params["continuationToken"] = continuation_token
 
 
 def get_all_work_items(schemas, project, state, mdata, start_date):
@@ -1100,29 +1098,6 @@ def get_all_work_items(schemas, project, state, mdata, start_date):
         )
     }
 
-    try:
-        wiql_response = authed_get(
-            "work_items_wiql", wiql_url,
-            params={"api-version": API_VERSION},
-            method="post",
-            json_body=wiql_query,
-        )
-    except WORK_ITEM_SKIP_EXCEPTIONS as e:
-        # Lack of the work-item read scope (401/403), a missing project (404),
-        # or a rejected query (400) must not fail the run — skip work items and
-        # let every other stream sync.
-        logger.warning("Could not query work items for project %s, skipping: %s", project, e)
-        return state
-
-    work_item_refs = wiql_response.json().get("workItems", [])
-    if not work_item_refs:
-        logger.info("No work items found for project %s since %s", project, since_date)
-        return state
-
-    logger.info("Fetching %d work items for project %s", len(work_item_refs), project)
-
-    all_ids = [wi["id"] for wi in work_item_refs]
-
     wi_fields_list = [
         "System.Id", "System.Rev", "System.WorkItemType", "System.State",
         "System.Title", "System.Description", "System.AreaPath",
@@ -1137,13 +1112,35 @@ def get_all_work_items(schemas, project, state, mdata, start_date):
     schema = schemas["work_items"]
     wi_mdata = mdata["work_items"]
 
-    max_changed_date = None
-    with metrics.record_counter("work_items") as counter:
-        for i in range(0, len(all_ids), 200):
-            batch_ids = all_ids[i:i + 200]
-            wi_url = f"{BASE_URL}/{org}/{project}/_apis/wit/workitemsbatch"
-            wi_body = {"ids": batch_ids, "fields": wi_fields_list, "errorPolicy": "omit"}
-            try:
+    # One skip boundary for the whole stream: a lack of the work-item read scope
+    # (401/403), a missing project (404), or a rejected query (400) is
+    # non-blocking — log and skip work items so every other stream still syncs.
+    # Any other error (e.g. a 503 that outlived its retries) propagates and fails
+    # the run; because the bookmark is only written on success, nothing is
+    # advanced past unsynced items and the project is redone from the prior
+    # bookmark next run.
+    try:
+        wiql_response = authed_get(
+            "work_items_wiql", wiql_url,
+            params={"api-version": API_VERSION},
+            method="post",
+            json_body=wiql_query,
+        )
+
+        work_item_refs = wiql_response.json().get("workItems", [])
+        if not work_item_refs:
+            logger.info("No work items found for project %s since %s", project, since_date)
+            return state
+
+        logger.info("Fetching %d work items for project %s", len(work_item_refs), project)
+        all_ids = [wi["id"] for wi in work_item_refs]
+
+        max_changed_date = None
+        with metrics.record_counter("work_items") as counter:
+            for i in range(0, len(all_ids), 200):
+                batch_ids = all_ids[i:i + 200]
+                wi_url = f"{BASE_URL}/{org}/{project}/_apis/wit/workitemsbatch"
+                wi_body = {"ids": batch_ids, "fields": wi_fields_list, "errorPolicy": "omit"}
                 response = authed_get("work_items", wi_url, params={"api-version": API_VERSION}, method="post", json_body=wi_body)
                 extraction_time = singer.utils.now()
                 for wi in response.json().get("value", []):
@@ -1207,10 +1204,10 @@ def get_all_work_items(schemas, project, state, mdata, start_date):
                     changed_date = fields.get("System.ChangedDate")
                     if changed_date and (max_changed_date is None or changed_date > max_changed_date):
                         max_changed_date = changed_date
-            except WORK_ITEM_SKIP_EXCEPTIONS as e:
-                logger.warning("Work items batch for project %s not accessible, skipping: %s", project, e)
-            except Exception as e:
-                logger.exception("Failed to fetch work items batch for project %s: %s", project, e)
+    except WORK_ITEM_SKIP_EXCEPTIONS as e:
+        logger.warning("Work items not accessible for project %s, skipping: %s", project, e)
+        return state
+
     if max_changed_date:
         singer.write_bookmark(state, project, "work_items", {"since": max_changed_date})
     return state
