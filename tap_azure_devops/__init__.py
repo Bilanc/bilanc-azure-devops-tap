@@ -3,7 +3,9 @@ import base64
 import difflib
 import json
 import os
+import sys
 import time
+from collections import OrderedDict
 
 import backoff
 import requests
@@ -22,6 +24,10 @@ REQUEST_TIMEOUT = 300
 # Maximum size (in bytes) of a single file blob we will download into memory.
 # Blobs larger than this are skipped to avoid blowing up the process memory.
 MAX_BLOB_SIZE = 1_000_000
+# Maximum total bytes of decoded blob content to hold in the LRU cache.
+# Bounds memory during large backfills; least-recently-used blobs are
+# evicted once this ceiling is reached.
+MAX_BLOB_CACHE_BYTES = 200_000_000
 REQUIRED_CONFIG_KEYS = ["start_date", "organization"]
 
 # Set once in main(), used throughout
@@ -37,6 +43,48 @@ _commit_stats_cache: dict = {}
 # Keyed by (repo_path, pr_number) so pull_request_threads and
 # pull_request_comments never re-fetch the same pages.
 _pr_threads_cache: dict = {}
+
+class BoundedBlobCache:
+    """LRU cache for blob content, bounded by total decoded bytes.
+
+    Keyed by (repo_path, object_id) so pull_request_files and
+    pull_request_commits never download the same blob twice in a sync run.
+    Blobs are content-addressed by git SHA, so identical content shares an
+    entry. Bounding by bytes (rather than entry count) keeps memory predictable
+    during large backfills regardless of individual file sizes.
+    """
+
+    _MISS = object()
+
+    def __init__(self, max_bytes):
+        self.max_bytes = max_bytes
+        self._store: OrderedDict = OrderedDict()
+        self._total_bytes = 0
+
+    def get(self, key):
+        """Return cached content, or _MISS if absent. None is a valid value
+        (blob skipped/too-large/errored) and is distinct from a miss."""
+        if key not in self._store:
+            return self._MISS
+        self._store.move_to_end(key)
+        return self._store[key][0]
+
+    def put(self, key, content):
+        size = sys.getsizeof(content) if content is not None else 0
+        if key in self._store:
+            self._total_bytes -= self._store[key][1]
+        self._store[key] = (content, size)
+        self._store.move_to_end(key)
+        self._total_bytes += size
+        while self._total_bytes > self.max_bytes and len(self._store) > 1:
+            _, (_, evicted_size) = self._store.popitem(last=False)
+            self._total_bytes -= evicted_size
+
+
+# Shared cache for blob content, bounded by total bytes (see class docstring).
+# The byte ceiling is overridable via the "max_blob_cache_bytes" config key,
+# applied once config is loaded in main().
+_blob_content_cache = BoundedBlobCache(MAX_BLOB_CACHE_BYTES)
 
 KEY_PROPERTIES = {
     "repositories": ["id"],
@@ -512,7 +560,11 @@ def get_pr_commits_for_pr(pr_id, pr_number, repo_path, schema, mdata):
                 commit["pr_number"] = pr_number
                 commit["id"] = f"{pr_id}-{commit['commitId']}"
                 commit["inserted_at"] = singer.utils.strftime(singer.utils.now())
-                commit.update(fetch_commit_stats(repo_path, commit["commitId"]))
+                stats = fetch_commit_stats(repo_path, commit["commitId"])
+                commit.update(stats)
+                additions, deletions = compute_diff_stats(repo_path, stats.get("changes"))
+                commit["additions"] = additions
+                commit["deletions"] = deletions
                 with singer.Transformer() as transformer:
                     rec = transformer.transform(commit, schema, metadata=metadata.to_map(mdata))
                 yield rec
@@ -618,6 +670,17 @@ def get_pr_comments_for_pr(pr_id, pr_number, repo_path, schema, mdata):
 
 
 def get_blob_content(repo_path, object_id):
+    cache_key = (repo_path, object_id)
+    cached = _blob_content_cache.get(cache_key)
+    if cached is not BoundedBlobCache._MISS:
+        return cached
+
+    content = _fetch_blob_content(repo_path, object_id)
+    _blob_content_cache.put(cache_key, content)
+    return content
+
+
+def _fetch_blob_content(repo_path, object_id):
     project, repo_name = repo_path.split("/", 1)
     org = config_data["organization"]
     url = f"{BASE_URL}/{org}/{project}/_apis/git/repositories/{repo_name}/blobs/{object_id}?api-version={API_VERSION}&$format=text"
@@ -655,6 +718,56 @@ def get_blob_content(repo_path, object_id):
     except Exception as e:
         logger.warning("Could not fetch blob %s: %s", object_id, e)
         return None
+
+
+def count_diff_lines(file_diff):
+    """Count added/removed lines in a unified diff, ignoring the +++/--- headers."""
+    additions, deletions = 0, 0
+    if file_diff:
+        for line in file_diff.splitlines():
+            if line.startswith("+") and not line.startswith("+++"):
+                additions += 1
+            elif line.startswith("-") and not line.startswith("---"):
+                deletions += 1
+    return additions, deletions
+
+
+def compute_diff_stats(repo_path, changes):
+    """Sum git-style line additions/deletions across a commit's changed files.
+
+    Uses the same blob-diff approach as pull_request_files: fetch the before
+    (originalObjectId) and after (objectId) blobs for each changed file and
+    count added/removed lines from the unified diff.
+    """
+    additions, deletions = 0, 0
+    for change in changes or []:
+        item = change.get("item") or {}
+        if item.get("isFolder") or item.get("gitObjectType") == "tree":
+            continue
+
+        change_type = change.get("changeType") or ""
+        is_deleted = "delete" in change_type.lower()
+
+        object_id = item.get("objectId")
+        original_object_id = item.get("originalObjectId")
+
+        after = "" if is_deleted else (get_blob_content(repo_path, object_id) if object_id else "")
+        before = get_blob_content(repo_path, original_object_id) if original_object_id else ""
+        if not before and not after:
+            continue
+
+        file_path = item.get("path", "")
+        diff_lines = list(difflib.unified_diff(
+            (before or "").splitlines(keepends=True),
+            (after or "").splitlines(keepends=True),
+            fromfile=f"a{file_path}",
+            tofile=f"b{file_path}",
+        ))
+        file_diff = "".join(diff_lines) if diff_lines else None
+        add, delete = count_diff_lines(file_diff)
+        additions += add
+        deletions += delete
+    return additions, deletions
 
 
 def get_pr_files_for_pr(pr_id, pr_number, repo_path, schema, mdata):
@@ -715,13 +828,7 @@ def get_pr_files_for_pr(pr_id, pr_number, repo_path, schema, mdata):
                 ))
                 file_diff = "".join(diff_lines) if diff_lines else None
 
-        additions, deletions = 0, 0
-        if file_diff:
-            for line in file_diff.splitlines():
-                if line.startswith("+") and not line.startswith("+++"):
-                    additions += 1
-                elif line.startswith("-") and not line.startswith("---"):
-                    deletions += 1
+        additions, deletions = count_diff_lines(file_diff)
 
         record = {
             "id": f"{pr_id}-{last_iteration_id}-{entry.get('changeId')}",
@@ -1285,6 +1392,10 @@ def main():
 
     args = singer.utils.parse_args(REQUIRED_CONFIG_KEYS)
     config_data = args.config
+
+    _blob_content_cache.max_bytes = int(
+        config_data.get("max_blob_cache_bytes", MAX_BLOB_CACHE_BYTES)
+    )
 
     nango_connection_id = config_data.get("nango_connection_id")
     nango_secret_key = config_data.get("nango_secret_key")
