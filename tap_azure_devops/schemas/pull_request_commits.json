@@ -38,6 +38,8 @@
         "Delete": { "type": ["null", "integer"] }
       }
     },
+    "additions": { "type": ["null", "integer"] },
+    "deletions": { "type": ["null", "integer"] },
     "parents": {
       "type": ["null", "array"],
       "items": { "type": ["null", "string"] }
