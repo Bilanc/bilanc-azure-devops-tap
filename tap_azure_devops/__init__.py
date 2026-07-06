@@ -20,6 +20,8 @@ session = requests.Session()
 BASE_URL = "https://dev.azure.com"
 VSAEX_BASE_URL = "https://vsaex.dev.azure.com"
 API_VERSION = "7.1"
+# The work item comments endpoint is only exposed under the preview API.
+WIT_COMMENTS_API_VERSION = "7.1-preview.3"
 REQUEST_TIMEOUT = 300
 # Maximum size (in bytes) of a single file blob we will download into memory.
 # Blobs larger than this are skipped to avoid blowing up the process memory.
@@ -96,6 +98,8 @@ KEY_PROPERTIES = {
     "pull_request_reviews": ["id"],
     "pull_request_comments": ["id"],
     "work_items": ["id"],
+    "work_item_updates": ["id"],
+    "work_item_comments": ["id"],
     "builds": ["id"],
     "pipelines": ["id"],
     "user_entitlements": ["id"],
@@ -107,6 +111,7 @@ KEY_PROPERTIES = {
 SUB_STREAMS = {
     "pull_requests": ["pull_request_commits", "pull_request_threads", "pull_request_files", "pull_request_reviews", "pull_request_comments"],
     "teams": ["team_members"],
+    "work_items": ["work_item_updates", "work_item_comments"],
 }
 
 PROJECT_SCOPED_STREAMS = {"repositories", "work_items", "builds", "pipelines", "teams"}
@@ -152,6 +157,19 @@ class DependencyException(Exception):
     pass
 
 
+# Errors that mean "this token can't see this resource" rather than "the sync
+# is broken": 401/403 (the token lacks the work-item read scope) and 404 (the
+# resource is absent). Work item syncing treats these as non-blocking — it logs
+# and skips so an org without the Boards scope granted still syncs everything
+# else (repos, PRs, builds…) instead of failing the whole run.
+WORK_ITEM_SKIP_EXCEPTIONS = (
+    NotFoundException,
+    BadCredentialsException,
+    AuthException,
+    BadRequestException,
+)
+
+
 ERROR_CODE_EXCEPTION_MAPPING = {
     304: {"raise_exception": NotModifiedError, "message": "Not Modified."},
     400: {"raise_exception": BadRequestException, "message": "The request is missing or has a bad parameter."},
@@ -163,6 +181,8 @@ ERROR_CODE_EXCEPTION_MAPPING = {
     429: {"raise_exception": APIRateLimitExceededError, "message": "Request rate limit exceeded."},
     500: {"raise_exception": InternalServerError, "message": "An error has occurred at Azure DevOps's end."},
     502: {"raise_exception": RetriableServerError, "message": "Azure DevOps server error."},
+    503: {"raise_exception": RetriableServerError, "message": "Azure DevOps service unavailable."},
+    504: {"raise_exception": RetriableServerError, "message": "Azure DevOps gateway timeout."},
 }
 
 
@@ -982,7 +1002,90 @@ def get_all_pull_requests(schemas, repo_path, state, mdata, start_date):
     return state
 
 
-def get_all_work_items(schema, project, state, mdata, start_date):
+def get_work_item_updates_for_item(work_item_id, project, schema, mdata):
+    org = config_data["organization"]
+    url = f"{BASE_URL}/{org}/{project}/_apis/wit/workItems/{work_item_id}/updates"
+    params = {"api-version": API_VERSION, "$top": 200}
+
+    try:
+        for response in authed_get_all_pages("work_item_updates", url, params):
+            for update in response.json().get("value", []):
+                fields = update.get("fields") or {}
+                if not fields:
+                    # Revisions that only touch relations/links carry no field
+                    # changes — nothing to emit for a changelog.
+                    continue
+                revised_by = update.get("revisedBy") or {}
+                # The tip revision reports revisedDate as the 9999 sentinel; the
+                # real timestamp lives in the System.ChangedDate change instead.
+                revised_date = (
+                    _clean_dt((fields.get("System.ChangedDate") or {}).get("newValue"))
+                    or _clean_dt(update.get("revisedDate"))
+                )
+                for field_name, change in fields.items():
+                    if not isinstance(change, dict):
+                        continue
+                    record = {
+                        "id": f"{work_item_id}-{update.get('id')}-{field_name}",
+                        "work_item_id": work_item_id,
+                        "update_id": update.get("id"),
+                        "rev": update.get("rev"),
+                        "revised_date": revised_date,
+                        "revised_by_display_name": revised_by.get("displayName"),
+                        "revised_by_unique_name": revised_by.get("uniqueName"),
+                        "field": field_name,
+                        "old_value": _stringify_wi_value(change.get("oldValue")),
+                        "new_value": _stringify_wi_value(change.get("newValue")),
+                        "_sdc_repository": project,
+                        "inserted_at": singer.utils.strftime(singer.utils.now()),
+                    }
+                    with singer.Transformer() as transformer:
+                        rec = transformer.transform(record, schema, metadata=metadata.to_map(mdata))
+                    yield rec
+    except WORK_ITEM_SKIP_EXCEPTIONS as e:
+        logger.warning("Updates for work item %s not accessible, skipping: %s", work_item_id, e)
+
+
+def get_work_item_comments_for_item(work_item_id, project, schema, mdata):
+    org = config_data["organization"]
+    url = f"{BASE_URL}/{org}/{project}/_apis/wit/workItems/{work_item_id}/comments"
+    params = {"api-version": WIT_COMMENTS_API_VERSION, "$top": 200}
+
+    try:
+        while True:
+            body = authed_get("work_item_comments", url, params).json()
+            for comment in body.get("comments", []):
+                created_by = comment.get("createdBy") or {}
+                modified_by = comment.get("modifiedBy") or {}
+                record = {
+                    "id": f"{work_item_id}-{comment.get('id')}",
+                    "work_item_id": work_item_id,
+                    "comment_id": comment.get("id"),
+                    "version": comment.get("version"),
+                    "text": comment.get("text"),
+                    "created_date": comment.get("createdDate"),
+                    "created_by_display_name": created_by.get("displayName"),
+                    "created_by_unique_name": created_by.get("uniqueName"),
+                    "modified_date": comment.get("modifiedDate"),
+                    "modified_by_display_name": modified_by.get("displayName"),
+                    "modified_by_unique_name": modified_by.get("uniqueName"),
+                    "url": comment.get("url"),
+                    "_sdc_repository": project,
+                    "inserted_at": singer.utils.strftime(singer.utils.now()),
+                }
+                with singer.Transformer() as transformer:
+                    rec = transformer.transform(record, schema, metadata=metadata.to_map(mdata))
+                yield rec
+
+            continuation_token = body.get("continuationToken")
+            if not continuation_token:
+                break
+            params["continuationToken"] = continuation_token
+    except WORK_ITEM_SKIP_EXCEPTIONS as e:
+        logger.warning("Comments for work item %s not accessible, skipping: %s", work_item_id, e)
+
+
+def get_all_work_items(schemas, project, state, mdata, start_date):
     org = config_data["organization"]
     bookmark = get_bookmark(state, project, "work_items", "since", start_date)
     since_date = bookmark or start_date or "1970-01-01T00:00:00Z"
@@ -1004,8 +1107,11 @@ def get_all_work_items(schema, project, state, mdata, start_date):
             method="post",
             json_body=wiql_query,
         )
-    except (NotFoundException, BadRequestException) as e:
-        logger.warning("Could not query work items for project %s: %s", project, e)
+    except WORK_ITEM_SKIP_EXCEPTIONS as e:
+        # Lack of the work-item read scope (401/403), a missing project (404),
+        # or a rejected query (400) must not fail the run — skip work items and
+        # let every other stream sync.
+        logger.warning("Could not query work items for project %s, skipping: %s", project, e)
         return state
 
     work_item_refs = wiql_response.json().get("workItems", [])
@@ -1023,9 +1129,13 @@ def get_all_work_items(schema, project, state, mdata, start_date):
         "System.TeamProject", "System.IterationPath", "System.CreatedDate",
         "System.ChangedDate", "System.CreatedBy", "System.ChangedBy",
         "System.AssignedTo", "System.Tags", "System.Parent", "System.BoardColumn",
+        "System.CommentCount",
         "Microsoft.VSTS.Common.Priority", "Microsoft.VSTS.Scheduling.StoryPoints",
         "Microsoft.VSTS.Common.ClosedDate", "Microsoft.VSTS.Scheduling.TargetDate",
     ]
+
+    schema = schemas["work_items"]
+    wi_mdata = mdata["work_items"]
 
     max_changed_date = None
     with metrics.record_counter("work_items") as counter:
@@ -1038,8 +1148,9 @@ def get_all_work_items(schema, project, state, mdata, start_date):
                 extraction_time = singer.utils.now()
                 for wi in response.json().get("value", []):
                     fields = wi.get("fields", {})
+                    wi_id = wi["id"]
                     record = {
-                        "id": wi["id"],
+                        "id": wi_id,
                         "url": wi.get("url"),
                         "_sdc_repository": project,
                         "inserted_at": singer.utils.strftime(extraction_time),
@@ -1067,12 +1178,37 @@ def get_all_work_items(schema, project, state, mdata, start_date):
                         "microsoft_vsts_scheduling_target_date": fields.get("Microsoft.VSTS.Scheduling.TargetDate"),
                     }
                     with singer.Transformer() as transformer:
-                        rec = transformer.transform(record, schema, metadata=metadata.to_map(mdata))
+                        rec = transformer.transform(record, schema, metadata=metadata.to_map(wi_mdata))
                     singer.write_record("work_items", rec, time_extracted=extraction_time)
+                    counter.increment()
+
+                    if schemas.get("work_item_updates"):
+                        for update_rec in get_work_item_updates_for_item(
+                            wi_id, project,
+                            schemas["work_item_updates"],
+                            mdata["work_item_updates"],
+                        ):
+                            singer.write_record(
+                                "work_item_updates", update_rec, time_extracted=extraction_time
+                            )
+
+                    # System.CommentCount lets us skip the per-item comments call
+                    # for the (common) case of a work item with no comments.
+                    if schemas.get("work_item_comments") and (fields.get("System.CommentCount") or 0) > 0:
+                        for comment_rec in get_work_item_comments_for_item(
+                            wi_id, project,
+                            schemas["work_item_comments"],
+                            mdata["work_item_comments"],
+                        ):
+                            singer.write_record(
+                                "work_item_comments", comment_rec, time_extracted=extraction_time
+                            )
+
                     changed_date = fields.get("System.ChangedDate")
                     if changed_date and (max_changed_date is None or changed_date > max_changed_date):
                         max_changed_date = changed_date
-                    counter.increment()
+            except WORK_ITEM_SKIP_EXCEPTIONS as e:
+                logger.warning("Work items batch for project %s not accessible, skipping: %s", project, e)
             except Exception as e:
                 logger.exception("Failed to fetch work items batch for project %s: %s", project, e)
     if max_changed_date:
@@ -1134,11 +1270,29 @@ def get_all_pipelines(schema, project, state, mdata, start_date):
 
 def _clean_dt(value):
     # Azure DevOps returns the sentinel "0001-01-01T00:00:00Z" for dates that
-    # were never set (e.g. users who have never accessed). These aren't real
-    # timestamps and break the target's timestamp columns, so normalize to null.
-    if not value or value.startswith("0001-01-01"):
+    # were never set (e.g. users who have never accessed) and "9999-01-01..."
+    # as the revisedDate of a work item's tip revision. Neither is a real
+    # timestamp, and both break the target's timestamp columns, so normalize
+    # them to null.
+    if not value or value.startswith("0001-01-01") or value.startswith("9999"):
         return None
     return value
+
+
+def _stringify_wi_value(value):
+    """Coerce a work item field value to a string for the old/new value columns.
+
+    Update field changes carry heterogeneous values: scalars, and identity
+    objects (e.g. System.AssignedTo) shaped like {"displayName": ...}. Keep the
+    column a uniform string so a state change and an assignee change land in the
+    same shape."""
+    if value is None:
+        return None
+    if isinstance(value, dict):
+        return value.get("displayName") or json.dumps(value)
+    if isinstance(value, list):
+        return json.dumps(value)
+    return str(value)
 
 
 def get_all_user_entitlements(schema, org, state, mdata, start_date):
