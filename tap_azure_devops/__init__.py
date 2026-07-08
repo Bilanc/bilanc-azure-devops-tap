@@ -3,8 +3,10 @@ import base64
 import difflib
 import json
 import os
+import re
 import sys
 import time
+import urllib.parse
 from collections import OrderedDict
 
 import backoff
@@ -97,9 +99,11 @@ KEY_PROPERTIES = {
     "pull_request_files": ["id"],
     "pull_request_reviews": ["id"],
     "pull_request_comments": ["id"],
+    "pull_request_work_items": ["id"],
     "work_items": ["id"],
     "work_item_updates": ["id"],
     "work_item_comments": ["id"],
+    "work_item_links": ["id"],
     "builds": ["id"],
     "pipelines": ["id"],
     "user_entitlements": ["id"],
@@ -109,9 +113,9 @@ KEY_PROPERTIES = {
 }
 
 SUB_STREAMS = {
-    "pull_requests": ["pull_request_commits", "pull_request_threads", "pull_request_files", "pull_request_reviews", "pull_request_comments"],
+    "pull_requests": ["pull_request_commits", "pull_request_threads", "pull_request_files", "pull_request_reviews", "pull_request_comments", "pull_request_work_items"],
     "teams": ["team_members"],
-    "work_items": ["work_item_updates", "work_item_comments"],
+    "work_items": ["work_item_updates", "work_item_comments", "work_item_links"],
 }
 
 PROJECT_SCOPED_STREAMS = {"repositories", "work_items", "builds", "pipelines", "teams"}
@@ -592,6 +596,35 @@ def get_pr_commits_for_pr(pr_id, pr_number, repo_path, schema, mdata):
         logger.warning("PR %s commits not found, skipping", pr_number)
 
 
+def get_pr_work_items_for_pr(pr_id, pr_number, repo_path, schema, mdata):
+    project, repo_name = repo_path.split("/", 1)
+    org = config_data["organization"]
+    url = f"{BASE_URL}/{org}/{project}/_apis/git/repositories/{repo_name}/pullRequests/{pr_number}/workitems"
+    params = {"api-version": API_VERSION}
+
+    try:
+        for response in authed_get_all_pages("pull_request_work_items", url, params):
+            extraction_time = singer.utils.now()
+            for ref in response.json().get("value", []):
+                wi_id = ref.get("id")
+                record = {
+                    "id": f"{pr_id}:{wi_id}",
+                    "pr_id": pr_id,
+                    "pr_number": pr_number,
+                    # The endpoint returns the work item id as a string; keep it
+                    # an integer to join cleanly against work_items.id.
+                    "work_item_id": int(wi_id) if wi_id is not None else None,
+                    "url": ref.get("url"),
+                    "_sdc_repository": repo_path,
+                    "inserted_at": singer.utils.strftime(extraction_time),
+                }
+                with singer.Transformer() as transformer:
+                    rec = transformer.transform(record, schema, metadata=metadata.to_map(mdata))
+                yield rec
+    except NotFoundException:
+        logger.warning("PR %s work items not found, skipping", pr_number)
+
+
 def fetch_pr_threads(repo_path, pr_number):
     cache_key = (repo_path, pr_number)
     if cache_key in _pr_threads_cache:
@@ -962,6 +995,16 @@ def get_all_pull_requests(schemas, repo_path, state, mdata, start_date):
                     "pull_request_comments", comment_rec, time_extracted=extraction_time
                 )
 
+        if schemas.get("pull_request_work_items"):
+            for wi_rec in get_pr_work_items_for_pr(
+                pr_id, pr_number, repo_path,
+                schemas["pull_request_work_items"],
+                mdata["pull_request_work_items"],
+            ):
+                singer.write_record(
+                    "pull_request_work_items", wi_rec, time_extracted=extraction_time
+                )
+
         singer.write_bookmark(
             state, repo_path, "pull_requests",
             {"since": singer.utils.strftime(extraction_time)},
@@ -1081,6 +1124,87 @@ def get_work_item_comments_for_item(work_item_id, project, schema, mdata):
         if not continuation_token:
             break
         params["continuationToken"] = continuation_token
+
+
+def _parse_git_artifact_link(url):
+    """Parse a ``vstfs:///Git/...`` artifact-link URL.
+
+    Work items link to PRs, branches and commits via ArtifactLink relations
+    whose url is an opaque vstfs URI, e.g.
+    ``vstfs:///Git/PullRequestId/{projectId}%2F{repoId}%2F{prId}``.
+    Returns ``(target_type, project_id, repository_id, target_id)`` or ``None``
+    for non-Git artifact links (builds, wiki, etc.) we don't model.
+    """
+    prefix = "vstfs:///Git/"
+    if not url or not url.startswith(prefix):
+        return None
+    kind, _, payload = url[len(prefix):].partition("/")
+    # The payload is {projectId}%2F{repoId}%2F{target}; branch targets can
+    # themselves contain encoded slashes (e.g. feature/foo -> GBfeature%2Ffoo),
+    # so split on the %2F separators first and unquote each segment.
+    segs = [urllib.parse.unquote(s) for s in re.split("%2[fF]", payload)]
+    if len(segs) < 3:
+        return None
+    project_id, repository_id = segs[0], segs[1]
+    target = "/".join(segs[2:])
+    if kind == "PullRequestId":
+        return ("pull_request", project_id, repository_id, target)
+    if kind == "Commit":
+        return ("commit", project_id, repository_id, target)
+    if kind == "Ref":
+        # Ref targets carry a two-letter prefix: GB = git branch, GT = git tag.
+        if target.startswith("GB"):
+            return ("branch", project_id, repository_id, target[2:])
+        if target.startswith("GT"):
+            return ("tag", project_id, repository_id, target[2:])
+        return ("ref", project_id, repository_id, target)
+    return None
+
+
+def get_work_item_links_for_batch(batch_ids, project, schema, mdata):
+    """Emit Git artifact links (PR / branch / commit) for a batch of work items.
+
+    Relations aren't returned by the main workitemsbatch call because that call
+    passes an explicit ``fields`` list, which the API forbids combining with
+    ``$expand``. So we make a second batch call expanding relations only.
+    """
+    org = config_data["organization"]
+    url = f"{BASE_URL}/{org}/{project}/_apis/wit/workitemsbatch"
+    body = {"ids": batch_ids, "$expand": "relations", "errorPolicy": "omit"}
+    response = authed_get(
+        "work_item_links", url,
+        params={"api-version": API_VERSION},
+        method="post",
+        json_body=body,
+    )
+    extraction_time = singer.utils.now()
+    for wi in response.json().get("value", []):
+        wi_id = wi["id"]
+        for rel in wi.get("relations", []):
+            if rel.get("rel") != "ArtifactLink":
+                continue
+            parsed = _parse_git_artifact_link(rel.get("url"))
+            if parsed is None:
+                continue
+            target_type, project_id, repository_id, target_id = parsed
+            attrs = rel.get("attributes") or {}
+            record = {
+                "id": f"{wi_id}:{target_type}:{repository_id}:{target_id}",
+                "work_item_id": wi_id,
+                "rel": rel.get("rel"),
+                "link_name": attrs.get("name"),
+                "comment": attrs.get("comment"),
+                "target_type": target_type,
+                "project_id": project_id,
+                "repository_id": repository_id,
+                "target_id": target_id,
+                "url": rel.get("url"),
+                "_sdc_repository": project,
+                "inserted_at": singer.utils.strftime(extraction_time),
+            }
+            with singer.Transformer() as transformer:
+                rec = transformer.transform(record, schema, metadata=metadata.to_map(mdata))
+            yield rec
 
 
 def get_all_work_items(schemas, project, state, mdata, start_date):
@@ -1204,6 +1328,25 @@ def get_all_work_items(schemas, project, state, mdata, start_date):
                     changed_date = fields.get("System.ChangedDate")
                     if changed_date and (max_changed_date is None or changed_date > max_changed_date):
                         max_changed_date = changed_date
+
+                # Relations require a second batch call ($expand can't be
+                # combined with the fields list above). Guard it so a links
+                # failure never aborts the already-synced work items.
+                if schemas.get("work_item_links"):
+                    try:
+                        for link_rec in get_work_item_links_for_batch(
+                            batch_ids, project,
+                            schemas["work_item_links"],
+                            mdata["work_item_links"],
+                        ):
+                            singer.write_record(
+                                "work_item_links", link_rec, time_extracted=extraction_time
+                            )
+                    except WORK_ITEM_SKIP_EXCEPTIONS as e:
+                        logger.warning(
+                            "Work item links not accessible for project %s, skipping: %s",
+                            project, e,
+                        )
     except WORK_ITEM_SKIP_EXCEPTIONS as e:
         logger.warning("Work items not accessible for project %s, skipping: %s", project, e)
         return state

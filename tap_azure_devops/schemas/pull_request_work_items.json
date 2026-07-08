@@ -1,0 +1,13 @@
+{
+  "type": ["null", "object"],
+  "additionalProperties": false,
+  "properties": {
+    "_sdc_repository": { "type": ["string"] },
+    "id": { "type": ["null", "string"] },
+    "pr_id": { "type": ["null", "string"] },
+    "pr_number": { "type": ["null", "integer"] },
+    "work_item_id": { "type": ["null", "integer"] },
+    "url": { "type": ["null", "string"] },
+    "inserted_at": { "type": ["string"], "format": "date-time" }
+  }
+}
