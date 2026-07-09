@@ -1213,10 +1213,16 @@ def get_all_work_items(schemas, project, state, mdata, start_date):
     since_date = bookmark or start_date or "1970-01-01T00:00:00Z"
 
     wiql_url = f"{BASE_URL}/{org}/{project}/_apis/wit/wiql"
+    # `project` arrives URL-encoded (the space-delimited `repository` config
+    # forces names like "Membership Value Delivery" to be written "…%20…").
+    # That encoding is correct in the URL path but must be decoded for the
+    # WIQL body, where [System.TeamProject] is a literal string comparison —
+    # otherwise the query looks for a project whose name contains "%20".
+    project_name = urllib.parse.unquote(project)
     wiql_query = {
         "query": (
             f"SELECT [System.Id] FROM WorkItems "
-            f"WHERE [System.TeamProject] = '{project}' "
+            f"WHERE [System.TeamProject] = '{project_name}' "
             f"AND [System.ChangedDate] >= '{since_date}' "
             f"ORDER BY [System.ChangedDate] DESC"
         )
