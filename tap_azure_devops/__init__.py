@@ -32,6 +32,10 @@ MAX_BLOB_SIZE = 1_000_000
 # Bounds memory during large backfills; least-recently-used blobs are
 # evicted once this ceiling is reached.
 MAX_BLOB_CACHE_BYTES = 200_000_000
+# Git's own binary heuristic: a NUL byte near the start of a blob means it is
+# not text. Binary blobs decode to meaningless replacement characters and are
+# skipped rather than emitted as file_content.
+BINARY_SNIFF_BYTES = 8000
 REQUIRED_CONFIG_KEYS = ["start_date", "organization"]
 
 # Set once in main(), used throughout
@@ -704,7 +708,7 @@ def get_pr_comments_for_pr(pr_id, pr_number, repo_path, schema, mdata):
                 "thread_id": thread_id,
                 "comment_id": comment.get("id"),
                 "parent_comment_id": comment.get("parentCommentId"),
-                "content": comment.get("content"),
+                "content": _sanitize_text(comment.get("content")),
                 "comment_type": comment.get("commentType"),
                 "published_date": comment.get("publishedDate"),
                 "last_updated_date": comment.get("lastUpdatedDate"),
@@ -734,6 +738,26 @@ def get_blob_content(repo_path, object_id):
     return content
 
 
+def _sanitize_text(text):
+    """Strip characters that cannot survive a load into a text column.
+
+    Postgres rejects NUL (\\x00) anywhere in a text/varchar value, and the
+    target loads a whole batch in a single COPY, so one such byte fails every
+    record in the flush. Lone surrogates are rejected the same way when the
+    value is encoded back to UTF-8.
+    """
+    if not text:
+        return text
+    if "\x00" in text:
+        text = text.replace("\x00", "")
+    # Surrogates cannot be encoded to UTF-8; replace them rather than lose the
+    # rest of the file. errors="replace" on decode never emits these, but a
+    # surrogate pair can survive from a UTF-16 declared encoding.
+    if any("\ud800" <= ch <= "\udfff" for ch in text):
+        text = text.encode("utf-8", errors="replace").decode("utf-8")
+    return text
+
+
 def _fetch_blob_content(repo_path, object_id):
     project, repo_name = repo_path.split("/", 1)
     org = config_data["organization"]
@@ -753,6 +777,12 @@ def _fetch_blob_content(repo_path, object_id):
                 )
                 return None
 
+            # UTF-16/32 encode ASCII with NUL padding, so a NUL byte only means
+            # "binary" for the byte-oriented encodings.
+            encoding = resp.encoding or "utf-8"
+            normalized = encoding.lower().replace("-", "").replace("_", "")
+            sniff_binary = not normalized.startswith(("utf16", "utf32"))
+
             # Stream the body and abort once decoded bytes exceed the limit,
             # so we never buffer more than max_size regardless of encoding.
             chunks = []
@@ -765,8 +795,15 @@ def _fetch_blob_content(repo_path, object_id):
                         object_id, max_size,
                     )
                     return None
+                # Sniff the leading bytes only: images, archives and compiled
+                # artifacts decode to replacement characters and are not worth
+                # diffing or storing.
+                if sniff_binary and not chunks and b"\x00" in chunk[:BINARY_SNIFF_BYTES]:
+                    logger.info("Skipping blob %s: binary content", object_id)
+                    return None
                 chunks.append(chunk)
-            return b"".join(chunks).decode(resp.encoding or "utf-8", errors="replace")
+            decoded = b"".join(chunks).decode(encoding, errors="replace")
+            return _sanitize_text(decoded)
         finally:
             resp.close()
     except Exception as e:
@@ -1105,7 +1142,7 @@ def get_work_item_comments_for_item(work_item_id, project, schema, mdata):
                 "work_item_id": work_item_id,
                 "comment_id": comment.get("id"),
                 "version": comment.get("version"),
-                "text": comment.get("text"),
+                "text": _sanitize_text(comment.get("text")),
                 "created_date": comment.get("createdDate"),
                 "created_by_display_name": created_by.get("displayName"),
                 "created_by_unique_name": created_by.get("uniqueName"),
@@ -1435,10 +1472,12 @@ def _stringify_wi_value(value):
     if value is None:
         return None
     if isinstance(value, dict):
-        return value.get("displayName") or json.dumps(value)
+        return _sanitize_text(value.get("displayName")) or json.dumps(value)
     if isinstance(value, list):
         return json.dumps(value)
-    return str(value)
+    # Field values carry free text (descriptions, repro steps) that the API can
+    # return with an escaped NUL, which the target cannot load.
+    return _sanitize_text(str(value))
 
 
 def get_all_user_entitlements(schema, org, state, mdata, start_date):
