@@ -418,6 +418,63 @@ def get_catalog():
     return {"streams": streams}
 
 
+def apply_packaged_schemas(catalog, selected_stream_ids):
+    """Replace the incoming catalog's schemas with the ones shipped in this package.
+
+    do_sync hands the catalog's schema straight to write_schema, so whatever
+    --properties file the pipeline passes is what decides the target's column
+    types. A property typed object or array there becomes a jsonb column, and
+    then every plain-text value fails the load with "invalid input syntax for
+    type json" — the tap's own schema is never consulted. The schemas in this
+    package are the source of truth for types, so substitute them and take only
+    selection metadata from the catalog. Streams with no packaged schema are
+    left untouched.
+    """
+    packaged = load_schemas()
+    for stream in catalog["streams"]:
+        stream_id = stream["tap_stream_id"]
+        if stream_id not in selected_stream_ids:
+            continue
+        expected = packaged.get(stream_id)
+        if not expected:
+            continue
+
+        expected_props = expected.get("properties") or {}
+        catalog_props = (stream.get("schema") or {}).get("properties") or {}
+
+        retyped = [
+            f"{name} {catalog_props[name].get('type')} -> {spec.get('type')}"
+            for name, spec in expected_props.items()
+            if name in catalog_props and catalog_props[name].get("type") != spec.get("type")
+        ]
+        if retyped:
+            logger.warning(
+                "Catalog types for %s disagree with the packaged schema; using the "
+                "packaged types: %s", stream_id, "; ".join(sorted(retyped)),
+            )
+
+        readded = sorted(set(expected_props) - set(catalog_props))
+        if readded:
+            # The catalog predates these properties, so the target has no column
+            # for them yet and will add one on this run.
+            logger.info(
+                "Catalog for %s omits %s; emitting them from the packaged schema",
+                stream_id, ", ".join(readded),
+            )
+
+        dropped = sorted(set(catalog_props) - set(expected_props))
+        if dropped:
+            # Nothing in this package produces these, so they would only ever be
+            # null. Flagged because their columns stop being written to.
+            logger.warning(
+                "Catalog for %s declares %s, which this tap does not emit; dropping "
+                "from the schema", stream_id, ", ".join(dropped),
+            )
+
+        stream["schema"] = expected
+    return catalog
+
+
 def get_selected_streams(catalog):
     selected = []
     for stream in catalog["streams"]:
@@ -1671,6 +1728,7 @@ def do_sync(config, state, catalog):
     start_date = config.get("start_date")
     selected_stream_ids = get_selected_streams(catalog)
     validate_dependencies(selected_stream_ids)
+    catalog = apply_packaged_schemas(catalog, selected_stream_ids)
 
     org = config["organization"]
     repositories = extract_repos_from_config(config)
