@@ -1,5 +1,7 @@
 from typing import Any, Dict, Optional
 
+import time
+
 import backoff
 import requests
 
@@ -7,10 +9,11 @@ NANGO_API_URL = "https://api.nango.dev"
 NANGO_PROVIDER_CONFIG_KEY = "azure-devops"
 NANGO_REQUEST_TIMEOUT = 30
 NANGO_MAX_TRIES = 5
+NANGO_MAX_RETRY_AFTER = 60
 
 
 class NangoServerError(Exception):
-    """Nango answered with a 5xx; retried by `fetch_nango_connection`."""
+    """Nango answered with a 429 or 5xx; retried by `fetch_nango_connection`."""
 
 
 class NangoRefreshError(Exception):
@@ -46,6 +49,15 @@ def nango_error_details(response: requests.Response) -> str:
     return (response.reason or "").strip() or f"HTTP {response.status_code}"
 
 
+def retry_after_seconds(response):
+    """Seconds Nango asked us to wait (`Retry-After`), capped; 0 if absent."""
+    try:
+        seconds = int(response.headers.get("Retry-After", 0))
+    except (TypeError, ValueError):
+        return 0
+    return min(max(seconds, 0), NANGO_MAX_RETRY_AFTER)
+
+
 @backoff.on_exception(
     backoff.expo,
     (
@@ -60,7 +72,7 @@ def nango_error_details(response: requests.Response) -> str:
 def fetch_nango_connection(
     config: Dict[str, Any], provider_config_key: str
 ) -> requests.Response:
-    """GET the Nango connection, retrying timeouts, connection errors and 5xx."""
+    """GET the Nango connection, retrying timeouts, connection errors, 429 and 5xx."""
     url = (
         f"{NANGO_API_URL}/connection/{config['nango_connection_id']}"
         f"?provider_config_key={provider_config_key}"
@@ -75,7 +87,9 @@ def fetch_nango_connection(
         timeout=NANGO_REQUEST_TIMEOUT,
     )
 
-    if response.status_code >= 500:
+    if response.status_code == 429:
+        time.sleep(retry_after_seconds(response))
+    if response.status_code == 429 or response.status_code >= 500:
         raise NangoServerError(
             f"Nango returned {response.status_code} fetching connection: "
             f"{nango_error_details(response)}"

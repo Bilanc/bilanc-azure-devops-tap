@@ -96,6 +96,24 @@ class TestGetNangoToken(unittest.TestCase):
         self.assertIn("503", str(ctx.exception))
         self.assertIn("Service Temporarily Unavailable", str(ctx.exception))
 
+    def test_429_is_retried_after_retry_after(self, get, sleep):
+        limited = response(429, reason="Too Many Requests")
+        limited.headers["Retry-After"] = "7"
+        get.side_effect = [limited, ok_response()]
+
+        self.assertEqual(nango.get_nango_token(config()), "pat-1")
+        self.assertEqual(get.call_count, 2)
+        sleep.assert_any_call(7)
+
+    def test_429_gives_up_after_max_tries(self, get, _sleep):
+        get.return_value = response(429, reason="Too Many Requests")
+
+        with self.assertRaises(nango.NangoServerError) as ctx:
+            nango.get_nango_token(config())
+
+        self.assertEqual(get.call_count, nango.NANGO_MAX_TRIES)
+        self.assertIn("429", str(ctx.exception))
+
     def test_timeout_connection_and_chunked_encoding_errors_are_retried(
         self, get, _sleep
     ):
@@ -115,6 +133,16 @@ class TestGetNangoToken(unittest.TestCase):
         with self.assertRaises(ValueError):
             nango.get_nango_token({"nango_secret_key": "secret"})
         get.assert_not_called()
+
+
+class TestRetryAfterSeconds(unittest.TestCase):
+    def test_caps_and_defaults(self):
+        resp = response(429)
+        self.assertEqual(nango.retry_after_seconds(resp), 0)
+        resp.headers["Retry-After"] = "600"
+        self.assertEqual(nango.retry_after_seconds(resp), nango.NANGO_MAX_RETRY_AFTER)
+        resp.headers["Retry-After"] = "Wed, 21 Oct 2026 07:28:00 GMT"
+        self.assertEqual(nango.retry_after_seconds(resp), 0)
 
 
 class TestNangoErrorDetails(unittest.TestCase):
