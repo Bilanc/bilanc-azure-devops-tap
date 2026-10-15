@@ -1,8 +1,5 @@
-import sys
 import time
-from datetime import datetime, timezone
-from email.utils import parsedate_to_datetime
-from typing import Any, Dict, Optional
+from typing import Any, Dict
 
 import backoff
 import requests
@@ -15,141 +12,69 @@ NANGO_MAX_RETRY_AFTER = 60
 
 
 class NangoServerError(Exception):
-    """Nango answered with a 429 or 5xx; retried by `fetch_nango_connection`."""
-
-    def __init__(self, message, retry_after=0):
-        super().__init__(message)
-        self.retry_after = retry_after
+    """Nango answered 429 or 5xx; retried by `fetch_nango_connection`."""
 
 
 class NangoRefreshError(Exception):
-    """Nango could not serve credentials for the connection (non-retriable)."""
-
-    def __init__(self, message: str, response: Optional[requests.Response] = None):
-        super().__init__(message)
-        self.response = response
-        self.status_code = response.status_code if response is not None else None
+    """Nango could not serve credentials for the connection."""
 
 
 def nango_error_details(response: requests.Response) -> str:
-    """Return Nango's `error.code: error.message` from an error body.
-
-    Only the error fields are surfaced so alerts never carry the connection
-    payload (end user name/email, credentials).
-    """
+    """Nango's `error.code: error.message`; never the connection payload."""
     try:
-        body = response.json()
-    except ValueError:
-        body = None
-
-    error = body.get("error") if isinstance(body, dict) else None
+        error = response.json().get("error")
+    except (ValueError, AttributeError):
+        error = None
     if isinstance(error, dict):
-        code = error.get("code") or error.get("type")
-        message = error.get("message")
-        details = ": ".join(str(part) for part in (code, message) if part)
-        if details:
-            return details
-    if isinstance(error, str) and error:
-        return error
-
-    return (response.reason or "").strip() or f"HTTP {response.status_code}"
+        error = ": ".join(str(v) for v in (error.get("code"), error.get("message")) if v)
+    return str(error or response.reason or f"HTTP {response.status_code}")
 
 
-def retry_after_seconds(response):
-    """Seconds Nango asked us to wait (`Retry-After`, delay or HTTP-date), capped."""
-    header = response.headers.get("Retry-After")
-    if not header:
-        return 0
+def _retry_after(response: requests.Response) -> int:
     try:
-        seconds = int(header)
+        return min(int(response.headers.get("Retry-After", 0)), NANGO_MAX_RETRY_AFTER)
     except ValueError:
-        try:
-            retry_at = parsedate_to_datetime(header)
-        except (TypeError, ValueError):
-            return 0
-        if retry_at.tzinfo is None:
-            retry_at = retry_at.replace(tzinfo=timezone.utc)
-        seconds = (retry_at - datetime.now(timezone.utc)).total_seconds()
-    return min(max(seconds, 0), NANGO_MAX_RETRY_AFTER)
-
-
-def _wait_for_retry_after(details):
-    """backoff hook: top the backoff delay up to Nango's `Retry-After`.
-
-    Runs only when another attempt follows, so an exhausted retry budget
-    fails immediately instead of sleeping first.
-    """
-    error = sys.exc_info()[1]
-    extra = getattr(error, "retry_after", 0) - details.get("wait", 0)
-    if extra > 0:
-        time.sleep(extra)
+        return 0
 
 
 @backoff.on_exception(
     backoff.expo,
-    (
-        requests.Timeout,
-        requests.ConnectionError,
-        requests.exceptions.ChunkedEncodingError,
-        NangoServerError,
-    ),
+    (requests.RequestException, NangoServerError),
     max_tries=NANGO_MAX_TRIES,
-    factor=2,
-    on_backoff=_wait_for_retry_after,
 )
 def fetch_nango_connection(
     config: Dict[str, Any], provider_config_key: str
 ) -> requests.Response:
     """GET the Nango connection, retrying timeouts, connection errors, 429 and 5xx."""
-    url = (
-        f"{NANGO_API_URL}/connection/{config['nango_connection_id']}"
-        f"?provider_config_key={provider_config_key}"
-    )
-
     response = requests.get(
-        url,
-        headers={
-            "Authorization": f"Bearer {config['nango_secret_key']}",
-            "Content-Type": "application/json",
-        },
+        f"{NANGO_API_URL}/connection/{config['nango_connection_id']}"
+        f"?provider_config_key={provider_config_key}",
+        headers={"Authorization": f"Bearer {config['nango_secret_key']}"},
         timeout=NANGO_REQUEST_TIMEOUT,
     )
 
+    if response.status_code == 429:
+        time.sleep(_retry_after(response))
     if response.status_code == 429 or response.status_code >= 500:
         raise NangoServerError(
-            f"Nango returned {response.status_code} fetching connection: "
-            f"{nango_error_details(response)}",
-            retry_after=retry_after_seconds(response),
+            f"Nango returned {response.status_code}: {nango_error_details(response)}"
         )
-
     return response
 
 
 def get_nango_token(config: Dict[str, Any]) -> str:
-    """Return the Azure DevOps PAT Nango holds for the connection.
+    """Return the Azure DevOps PAT Nango holds for the connection (Basic auth, no refresh)."""
+    for key in ("nango_secret_key", "nango_connection_id"):
+        if not config.get(key):
+            raise ValueError(f"{key} not configured")
 
-    The connection is a Basic-auth (PAT) connection, so there is no token
-    refresh involved: timeouts, connection errors and Nango 5xx are backed off
-    and retried, any other non-2xx raises `NangoRefreshError` carrying Nango's
-    error code and message.
-    """
-    if not config.get("nango_secret_key"):
-        raise ValueError("nango_secret_key not configured")
-    if not config.get("nango_connection_id"):
-        raise ValueError("nango_connection_id not configured")
-
-    provider_config_key = config.get(
-        "nango_provider_config_key", NANGO_PROVIDER_CONFIG_KEY
-    )
-
+    provider_config_key = config.get("nango_provider_config_key", NANGO_PROVIDER_CONFIG_KEY)
     response = fetch_nango_connection(config, provider_config_key)
 
     if not response.ok:
         raise NangoRefreshError(
             f"Nango returned {response.status_code} for connection "
-            f"{config['nango_connection_id']} ({provider_config_key}): "
-            f"{nango_error_details(response)}",
-            response,
+            f"{config['nango_connection_id']}: {nango_error_details(response)}"
         )
 
     return response.json().get("credentials", {}).get("password")
