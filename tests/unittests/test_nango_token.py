@@ -103,7 +103,7 @@ class TestGetNangoToken(unittest.TestCase):
 
         self.assertEqual(nango.get_nango_token(config()), "pat-1")
         self.assertEqual(get.call_count, 2)
-        sleep.assert_any_call(7)
+        self.assertAlmostEqual(sum(c.args[0] for c in sleep.call_args_list), 7)
 
     def test_429_gives_up_after_max_tries(self, get, sleep):
         limited = response(429, reason="Too Many Requests")
@@ -115,6 +115,10 @@ class TestGetNangoToken(unittest.TestCase):
 
         self.assertEqual(get.call_count, nango.NANGO_MAX_TRIES)
         self.assertIn("429", str(ctx.exception))
+        self.assertAlmostEqual(
+            sum(c.args[0] for c in sleep.call_args_list),
+            60 * (nango.NANGO_MAX_TRIES - 1),
+        )
 
     def test_negative_retry_after_is_clamped(self, get, sleep):
         limited = response(429, reason="Too Many Requests")
@@ -124,7 +128,9 @@ class TestGetNangoToken(unittest.TestCase):
         nango.get_nango_token(config())
 
         self.assertEqual(get.call_count, 2)
-        sleep.assert_any_call(0)
+        waited = [c.args[0] for c in sleep.call_args_list]
+        self.assertTrue(all(seconds >= 0 for seconds in waited))
+        self.assertLessEqual(sum(waited), 1)
 
     def test_timeout_connection_and_chunked_encoding_errors_are_retried(
         self, get, _sleep
