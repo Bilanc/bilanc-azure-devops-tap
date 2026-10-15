@@ -1,5 +1,7 @@
 import json
 import unittest
+from datetime import datetime, timedelta, timezone
+from email.utils import format_datetime
 from unittest import mock
 
 import requests
@@ -103,16 +105,19 @@ class TestGetNangoToken(unittest.TestCase):
 
         self.assertEqual(nango.get_nango_token(config()), "pat-1")
         self.assertEqual(get.call_count, 2)
-        sleep.assert_any_call(7)
+        self.assertAlmostEqual(sum(c.args[0] for c in sleep.call_args_list), 7)
 
-    def test_429_gives_up_after_max_tries(self, get, _sleep):
-        get.return_value = response(429, reason="Too Many Requests")
+    def test_429_gives_up_after_max_tries_without_a_final_wait(self, get, sleep):
+        limited = response(429, reason="Too Many Requests")
+        limited.headers["Retry-After"] = "60"
+        get.return_value = limited
 
         with self.assertRaises(nango.NangoServerError) as ctx:
             nango.get_nango_token(config())
 
         self.assertEqual(get.call_count, nango.NANGO_MAX_TRIES)
         self.assertIn("429", str(ctx.exception))
+        self.assertAlmostEqual(sum(c.args[0] for c in sleep.call_args_list), 60 * (nango.NANGO_MAX_TRIES - 1))
 
     def test_timeout_connection_and_chunked_encoding_errors_are_retried(
         self, get, _sleep
@@ -141,7 +146,16 @@ class TestRetryAfterSeconds(unittest.TestCase):
         self.assertEqual(nango.retry_after_seconds(resp), 0)
         resp.headers["Retry-After"] = "600"
         self.assertEqual(nango.retry_after_seconds(resp), nango.NANGO_MAX_RETRY_AFTER)
-        resp.headers["Retry-After"] = "Wed, 21 Oct 2026 07:28:00 GMT"
+        resp.headers["Retry-After"] = "not a date"
+        self.assertEqual(nango.retry_after_seconds(resp), 0)
+
+    def test_http_date(self):
+        resp = response(429)
+        resp.headers["Retry-After"] = format_datetime(
+            datetime.now(timezone.utc) + timedelta(seconds=30), usegmt=True
+        )
+        self.assertTrue(27 < nango.retry_after_seconds(resp) <= 30)
+        resp.headers["Retry-After"] = "Wed, 21 Oct 2015 07:28:00 GMT"
         self.assertEqual(nango.retry_after_seconds(resp), 0)
 
 

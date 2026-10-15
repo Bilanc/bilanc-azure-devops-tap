@@ -1,6 +1,8 @@
-from typing import Any, Dict, Optional
-
+import sys
 import time
+from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
+from typing import Any, Dict, Optional
 
 import backoff
 import requests
@@ -14,6 +16,10 @@ NANGO_MAX_RETRY_AFTER = 60
 
 class NangoServerError(Exception):
     """Nango answered with a 429 or 5xx; retried by `fetch_nango_connection`."""
+
+    def __init__(self, message, retry_after=0):
+        super().__init__(message)
+        self.retry_after = retry_after
 
 
 class NangoRefreshError(Exception):
@@ -50,12 +56,33 @@ def nango_error_details(response: requests.Response) -> str:
 
 
 def retry_after_seconds(response):
-    """Seconds Nango asked us to wait (`Retry-After`), capped; 0 if absent."""
-    try:
-        seconds = int(response.headers.get("Retry-After", 0))
-    except (TypeError, ValueError):
+    """Seconds Nango asked us to wait (`Retry-After`, delay or HTTP-date), capped."""
+    header = response.headers.get("Retry-After")
+    if not header:
         return 0
+    try:
+        seconds = int(header)
+    except ValueError:
+        try:
+            retry_at = parsedate_to_datetime(header)
+        except (TypeError, ValueError):
+            return 0
+        if retry_at.tzinfo is None:
+            retry_at = retry_at.replace(tzinfo=timezone.utc)
+        seconds = (retry_at - datetime.now(timezone.utc)).total_seconds()
     return min(max(seconds, 0), NANGO_MAX_RETRY_AFTER)
+
+
+def _wait_for_retry_after(details):
+    """backoff hook: top the backoff delay up to Nango's `Retry-After`.
+
+    Runs only when another attempt follows, so an exhausted retry budget
+    fails immediately instead of sleeping first.
+    """
+    error = sys.exc_info()[1]
+    extra = getattr(error, "retry_after", 0) - details.get("wait", 0)
+    if extra > 0:
+        time.sleep(extra)
 
 
 @backoff.on_exception(
@@ -68,6 +95,7 @@ def retry_after_seconds(response):
     ),
     max_tries=NANGO_MAX_TRIES,
     factor=2,
+    on_backoff=_wait_for_retry_after,
 )
 def fetch_nango_connection(
     config: Dict[str, Any], provider_config_key: str
@@ -87,12 +115,11 @@ def fetch_nango_connection(
         timeout=NANGO_REQUEST_TIMEOUT,
     )
 
-    if response.status_code == 429:
-        time.sleep(retry_after_seconds(response))
     if response.status_code == 429 or response.status_code >= 500:
         raise NangoServerError(
             f"Nango returned {response.status_code} fetching connection: "
-            f"{nango_error_details(response)}"
+            f"{nango_error_details(response)}",
+            retry_after=retry_after_seconds(response),
         )
 
     return response
