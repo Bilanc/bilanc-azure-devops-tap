@@ -27,12 +27,14 @@ def nango_error_details(response: requests.Response) -> str:
         error = None
     if isinstance(error, dict):
         error = ": ".join(str(v) for v in (error.get("code"), error.get("message")) if v)
-    return str(error or response.reason or f"HTTP {response.status_code}")
+    if not isinstance(error, str):
+        error = None
+    return error or response.reason or f"HTTP {response.status_code}"
 
 
 def _retry_after(response: requests.Response) -> int:
     try:
-        return min(int(response.headers.get("Retry-After", 0)), NANGO_MAX_RETRY_AFTER)
+        return min(max(int(response.headers.get("Retry-After", 0)), 0), NANGO_MAX_RETRY_AFTER)
     except ValueError:
         return 0
 

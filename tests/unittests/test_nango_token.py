@@ -116,6 +116,16 @@ class TestGetNangoToken(unittest.TestCase):
         self.assertEqual(get.call_count, nango.NANGO_MAX_TRIES)
         self.assertIn("429", str(ctx.exception))
 
+    def test_negative_retry_after_is_clamped(self, get, sleep):
+        limited = response(429, reason="Too Many Requests")
+        limited.headers["Retry-After"] = "-3"
+        get.side_effect = [limited, ok_response()]
+
+        nango.get_nango_token(config())
+
+        self.assertEqual(get.call_count, 2)
+        sleep.assert_any_call(0)
+
     def test_timeout_connection_and_chunked_encoding_errors_are_retried(
         self, get, _sleep
     ):
@@ -139,6 +149,10 @@ class TestGetNangoToken(unittest.TestCase):
 
 
 class TestNangoErrorDetails(unittest.TestCase):
+    def test_list_error_body_is_not_echoed(self):
+        resp = response(400, {"error": ["token=secret"]})
+        self.assertEqual(nango.nango_error_details(resp), "HTTP 400")
+
     def test_prefers_code_and_message(self):
         resp = response(400, {"error": {"code": "invalid_credentials", "message": "nope"}})
         self.assertEqual(nango.nango_error_details(resp), "invalid_credentials: nope")
