@@ -216,6 +216,21 @@ def get_auth_header():
     return {"Authorization": f"Basic {token}"}
 
 
+# Azure returns this as a 400/403 (not a 404) when a project has been deleted,
+# disabled, or has the relevant service (e.g. Pipelines) turned off. Treat it
+# like a 404 so the sync skips that project instead of aborting the whole run.
+PROJECT_DOES_NOT_EXIST_TYPE_KEY = "ProjectDoesNotExistException"
+PROJECT_DOES_NOT_EXIST_CODE = "VS800075"
+
+
+def is_project_does_not_exist(response_json):
+    if not isinstance(response_json, dict):
+        return False
+    if response_json.get("typeKey") == PROJECT_DOES_NOT_EXIST_TYPE_KEY:
+        return True
+    return str(response_json.get("message", "")).startswith(PROJECT_DOES_NOT_EXIST_CODE)
+
+
 def raise_for_error(resp, source):
     error_code = resp.status_code
     try:
@@ -226,6 +241,13 @@ def raise_for_error(resp, source):
     if error_code == 404:
         logger.warning("404 for %s — resource not found, skipping", source)
         raise NotFoundException(f"404 for {source}")
+
+    if error_code in (400, 403) and is_project_does_not_exist(response_json):
+        logger.warning(
+            "%s for %s — project does not exist or is inaccessible, skipping: %s",
+            error_code, source, response_json.get("message"),
+        )
+        raise NotFoundException(f"Project does not exist for {source} | URL: {resp.url}")
 
     message = ERROR_CODE_EXCEPTION_MAPPING.get(error_code, {}).get(
         "message", f"Unknown Error ({error_code}) for {source}"
