@@ -309,7 +309,24 @@ def authed_get(source, url, params=None, method="get", json_body=None, stream=Fa
             raise APIRateLimitExceededError(f"Rate limit exceeded, waited {wait}s before retry")
         if resp.status_code not in (200, 201):
             raise_for_error(resp, source)
+        if not stream and (resp.status_code == 200 or resp.content):
+            ensure_json_body(resp, source)
         return resp
+
+
+# Azure occasionally returns a 200 whose body is cut off mid-document (seen on
+# userentitlements: "Unterminated string starting at ... char 83540"). Callers
+# all do resp.json(), so surface that here as a retriable error and let the
+# backoff decorator on authed_get re-request instead of aborting the sync.
+# An empty 200 from these JSON endpoints is a truncation too, so it is retried;
+# only a bare empty 201 is left alone.
+def ensure_json_body(resp, source):
+    try:
+        resp.json()
+    except ValueError as exc:
+        raise RetriableServerError(
+            f"Malformed JSON body for {source} | URL: {resp.url} | {exc}"
+        ) from exc
 
 
 def authed_get_all_pages(source, url, params=None):
