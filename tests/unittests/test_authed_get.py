@@ -54,6 +54,13 @@ class TestAuthedGetMalformedJson(unittest.TestCase):
             authed_get("user_entitlements", "https://vsaex.dev.azure.com/org/_apis/userentitlements")
         self.assertEqual(request.call_count, 10)
 
+    def test_empty_201_is_returned_without_retry(self, request, _auth, _sleep):
+        created = response(201, b"", url="https://dev.azure.com/org/_apis/wit/wiql")
+        request.return_value = created
+        resp = authed_get("work_items", created.url, method="post", json_body={"query": "x"})
+        self.assertIs(resp, created)
+        self.assertEqual(request.call_count, 1)
+
     def test_streamed_response_body_is_not_parsed(self, request, _auth, _sleep):
         blob = response(200, b"\x00binary", url="https://dev.azure.com/org/_apis/git/blobs/x")
         request.return_value = blob

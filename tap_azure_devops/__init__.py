@@ -309,7 +309,7 @@ def authed_get(source, url, params=None, method="get", json_body=None, stream=Fa
             raise APIRateLimitExceededError(f"Rate limit exceeded, waited {wait}s before retry")
         if resp.status_code not in (200, 201):
             raise_for_error(resp, source)
-        if not stream:
+        if not stream and resp.content:
             ensure_json_body(resp, source)
         return resp
 
@@ -318,6 +318,7 @@ def authed_get(source, url, params=None, method="get", json_body=None, stream=Fa
 # userentitlements: "Unterminated string starting at ... char 83540"). Callers
 # all do resp.json(), so surface that here as a retriable error and let the
 # backoff decorator on authed_get re-request instead of aborting the sync.
+# Empty bodies (e.g. a bare 201) are left alone; they are not a truncation.
 def ensure_json_body(resp, source):
     try:
         resp.json()
