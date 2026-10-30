@@ -54,6 +54,13 @@ class TestAuthedGetMalformedJson(unittest.TestCase):
             authed_get("user_entitlements", "https://vsaex.dev.azure.com/org/_apis/userentitlements")
         self.assertEqual(request.call_count, 10)
 
+    def test_empty_200_is_retried_then_succeeds(self, request, _auth, _sleep):
+        good = response(200, b'{"items": []}')
+        request.side_effect = [response(200, b""), good]
+        resp = authed_get("user_entitlements", good.url, {"top": 100})
+        self.assertIs(resp, good)
+        self.assertEqual(request.call_count, 2)
+
     def test_empty_201_is_returned_without_retry(self, request, _auth, _sleep):
         created = response(201, b"", url="https://dev.azure.com/org/_apis/wit/wiql")
         request.return_value = created
